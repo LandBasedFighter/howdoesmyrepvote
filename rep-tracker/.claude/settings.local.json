@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress?address=123+peachtree+st+atlanta+ga&benchmark=Public_AR_Current&vintage=Current_Current&layers=54&format=json\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s \"https://api.congress.gov/v3/member?currentMember=True&limit=1&api_key=6Ez82OSewBgaAIXMYfqqdv8PuFx75DJl1GZErKoV\")",
+      "Bash(curl -s \"https://api.congress.gov/v3/member?currentMember=True&limit=600&api_key=6Ez82OSewBgaAIXMYfqqdv8PuFx75DJl1GZErKoV\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('members returned:', len\\(d['members']\\)\\); print\\('pagination:', d['pagination']\\)\")",
+      "Bash(curl -s \"https://api.congress.gov/v3/member?currentMember=True&limit=250&offset=0&api_key=6Ez82OSewBgaAIXMYfqqdv8PuFx75DJl1GZErKoV\")",
+      "Bash(curl -s \"https://api.congress.gov/v3/member?currentMember=True&limit=250&offset=250&api_key=6Ez82OSewBgaAIXMYfqqdv8PuFx75DJl1GZErKoV\")",
+      "Bash(curl -s \"https://api.congress.gov/v3/member?currentMember=True&limit=250&offset=500&api_key=6Ez82OSewBgaAIXMYfqqdv8PuFx75DJl1GZErKoV\")"
+    ]
+  }
+}
