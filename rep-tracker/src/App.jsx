@@ -50,7 +50,7 @@ function MemberCard({ member, chamber }) {
           <ul style={{ marginTop: "12px", paddingLeft: "0", listStyle: "none" }}>
             {pagedBills.map((bill, i) => (
               <li key={i} style={{ marginBottom: "12px", borderTop: "1px solid #eee", paddingTop: "10px" }}>
-                <div style={{ fontWeight: "bold", fontSize: "0.9rem" }}>{bill.title}</div>
+                <div style={{ fontWeight: "bold", fontSize: "0.9rem" }}>{bill.title ? bill.title : `Amendment ${bill.amendmentNumber}`}</div>
                 <div style={{ fontSize: "0.8rem", color: "#888", marginTop: "4px" }}>
                   {bill.type} {bill.number} · Introduced {bill.introducedDate}
                   {bill.policyArea && ` · ${bill.policyArea}`}

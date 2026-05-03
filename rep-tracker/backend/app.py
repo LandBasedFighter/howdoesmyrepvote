@@ -118,26 +118,30 @@ def get_reps():
 
 @app.route("/member/<bioguide_id>/legislation")
 def get_member_legislation(bioguide_id):
-    MAX_BILLS = 10
+    MAX_BILLS = 5
     bills = []
     url = f"{BASE_URL}/member/{bioguide_id}/sponsored-legislation"
     params = {
         "api_key": API_KEY,
-        "limit": 10
+        "limit": 5
     }
     while len(bills) < MAX_BILLS:
         res = requests.get(url, params=params)
         data = res.json()
         for item in data.get("sponsoredLegislation", []):
-            if item.get("title") is not None:
+                if item.get("amendmentNumber") is not None: #if bill has an ammendmentnum instead of title
+                    detail_res = requests.get(item["url"], params={"api_key": API_KEY})
+                    detail_data = detail_res.json()
+                    amendment_title = detail_data.get("amendment",{}).get("amendedBill",{}).get("title",{})
+                    item["title"] = amendment_title
+
                 bills.append(item)
                 if len(bills) >= MAX_BILLS:
                     break
         if not data.get("pagination", {}).get("next") or len(bills) >= MAX_BILLS:
             break
         url = data["pagination"]["next"]
-        params = {"api_key": API_KEY, "limit": 10}
-    print(f"fetched {len(bills)} bills")
+        params = {"api_key": API_KEY, "limit": 5}
     return jsonify({"bills": bills})
 
 
