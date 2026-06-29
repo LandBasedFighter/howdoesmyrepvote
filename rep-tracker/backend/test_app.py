@@ -139,7 +139,7 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
         "date": "2026-01-01T12:00:00-05:00",
         "description": "Example Act",
         "interpretation": {
-            "issue": "Other policy votes",
+            "issue": "Other recent policy",
             "kind": "policy",
             "priority": 0,
             "summary": "Substantive policy vote related to Example Act.",
@@ -324,11 +324,57 @@ def test_build_stance_profile_groups_policy_tendencies(monkeypatch):
     assert profile["policyVoteCount"] == 2
     assert profile["scannedVoteCount"] == 3
     assert "Analyzed 2 substantive policy votes from 3 recent roll calls" in profile["caveat"]
-    assert profile["issues"][0]["issue"] == "Energy & environment"
+    assert profile["issues"][0]["issue"] == "Energy, climate & utilities"
     assert profile["issues"][0]["supported"] == 1
-    assert profile["issues"][0]["opposed"] == 1
-    assert profile["issues"][0]["direction"] == "mixed"
+    assert profile["issues"][0]["opposed"] == 0
+    assert profile["issues"][1]["issue"] == "Cost of living & consumer rules"
+    assert profile["issues"][1]["supported"] == 0
+    assert profile["issues"][1]["opposed"] == 1
     assert len(profile["notableVotes"]) == 2
+
+
+def test_compact_vote_evidence_includes_bill_summary(monkeypatch):
+    def fake_congress_get(endpoint, **params):
+        assert endpoint == "bill/119/hr/42/summaries"
+        return {
+            "summaries": [{
+                "text": "<p>This bill lowers household energy costs &amp; creates rebates for families.</p>"
+            }]
+        }
+
+    monkeypatch.setattr(backend, "congress_get", fake_congress_get)
+
+    evidence = backend.compact_vote_evidence([{
+        "bill": {"type": "HR", "number": "42", "title": "Energy Rebates Act"},
+        "congress": 119,
+        "description": "Energy Rebates Act",
+        "interpretation": {"issue": "Energy, climate & utilities"},
+        "position": "Yea",
+        "question": "On Passage",
+        "result": "Passed",
+    }])
+
+    assert evidence[0]["summary"] == "This bill lowers household energy costs & creates rebates for families."
+
+
+def test_compact_vote_evidence_handles_missing_bill_summary(monkeypatch):
+    monkeypatch.setattr(
+        backend,
+        "congress_get",
+        lambda endpoint, **params: {"error": "not found", "statusCode": 404},
+    )
+
+    evidence = backend.compact_vote_evidence([{
+        "bill": {"type": "S.J.Res.", "number": "185", "title": "Foreign policy resolution"},
+        "congress": 119,
+        "description": "Foreign policy resolution",
+        "interpretation": {"issue": "Defense, veterans & foreign policy"},
+        "position": "Nay",
+        "question": "On Passage",
+        "result": "Failed",
+    }])
+
+    assert evidence[0]["summary"] is None
 
 
 def test_ai_stance_summary_uses_gemini_when_configured(monkeypatch):

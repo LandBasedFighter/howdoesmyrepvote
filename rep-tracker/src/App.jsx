@@ -37,6 +37,23 @@ function formatVoteMeta(vote) {
   return parts
 }
 
+function issueExample(issue) {
+  const vote = issue.evidence?.[0]
+  if (!vote) return ""
+  const title = vote.description || vote.bill?.title || vote.question
+  if (!title) return ""
+  return `${vote.position || "Voted"} on ${title}`
+}
+
+function profileSummaryNote(profile) {
+  const policyCount = profile.policyVoteCount ?? 0
+  const scannedCount = profile.scannedVoteCount ?? 0
+  if (profile.aiSummary?.provider === "gemini") {
+    return `AI-generated summary based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. Review the evidence below; this is a snapshot, not a full career scorecard.`
+  }
+  return `Based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. AI summary is unavailable; this is a snapshot, not a full career scorecard.`
+}
+
 function sourceLabel(type, items) {
   if (type === "profile") return "Source: normalized recent roll-call votes"
   if (type === "legislation") return "Source: Congress.gov"
@@ -200,7 +217,7 @@ function MemberCard({ member, chamber }) {
           {profile.aiSummary && (
             <div className="ai-summary-card">
               <div className="ai-summary-label">
-                {profile.aiSummary.provider === "gemini" ? "Gemini Flash analysis" : "Gemini analysis unavailable"}
+                {profile.aiSummary.provider === "gemini" ? "Policy Flash analysis" : "Policy analysis unavailable"}
               </div>
               <div className="ai-summary-headline">{profile.aiSummary.headline}</div>
               {profile.aiSummary.takeaways?.length > 0 && (
@@ -208,12 +225,9 @@ function MemberCard({ member, chamber }) {
                   {profile.aiSummary.takeaways.map(takeaway => <li key={takeaway}>{takeaway}</li>)}
                 </ul>
               )}
-              {profile.aiSummary.caveats?.length > 0 && (
-                <div className="ai-caveat">{profile.aiSummary.caveats[0]}</div>
-              )}
+              <div className="ai-caveat">{profileSummaryNote(profile)}</div>
             </div>
           )}
-          <div className="profile-caveat">{profile.caveat}</div>
           {profile.issues.length > 0 ? (
             <div className="issue-list">
               {profile.issues.map(issue => (
@@ -221,6 +235,7 @@ function MemberCard({ member, chamber }) {
                   <div>
                     <div className="issue-title">{issue.issue}</div>
                     <div className="issue-direction">{issue.direction} · {issue.confidence}</div>
+                    {issueExample(issue) && <div className="issue-example">{issueExample(issue)}</div>}
                   </div>
                   <div className="issue-counts">
                     <span>{issue.supported} supported</span>
@@ -357,6 +372,7 @@ function App() {
               value={address}
               onChange={e => setAddress(e.target.value)}
               onKeyDown={e => e.key === "Enter" && fetchReps()}
+              disabled={loading}
             />
             <button className="primary-button" onClick={fetchReps} disabled={loading}>
               <LoadingButtonContent loading={loading} loadingText="Searching">
@@ -364,7 +380,7 @@ function App() {
               </LoadingButtonContent>
             </button>
           </div>
-          <p className="helper-text">Powered by Census geocoding and Congress.gov data.</p>
+          <p className="helper-text">Powered by Census geocoding and congressional vote data. Performs best with complete addresses (e.g., 350 5th Ave New York, NY 10001).</p>
         </div>
       </section>
 

@@ -419,15 +419,6 @@ h3 {
   font-size: 0.82rem;
 }
 
-.profile-caveat {
-  margin-bottom: 12px;
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  background: var(--surface-strong);
-  font-size: 0.9rem;
-}
-
 .issue-list {
   display: grid;
   gap: 10px;
@@ -456,6 +447,13 @@ h3 {
   font-size: 0.84rem;
   font-weight: 700;
   text-transform: uppercase;
+}
+
+.issue-example {
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.35;
 }
 
 .issue-counts {
