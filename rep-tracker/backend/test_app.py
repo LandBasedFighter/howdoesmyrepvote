@@ -1,4 +1,5 @@
 import os
+import json
 from unittest.mock import Mock
 import xml.etree.ElementTree as ET
 
@@ -91,7 +92,7 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
                     "congress": 119,
                     "legislationNumber": "1",
                     "legislationType": "HR",
-                    "legislationUrl": "https://api.congress.gov/v3/bill/119/hr/1",
+                    "legislationUrl": "https://www.congress.gov/bill/119/house-bill/1",
                     "result": "Passed",
                     "results": [
                         {"bioguideID": "A000001", "voteCast": "Nay"},
@@ -104,7 +105,22 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
                     "voteType": "Yea and Nay",
                 }
             }
-        if endpoint == "https://api.congress.gov/v3/bill/119/hr/1":
+        if endpoint == "house-vote/119/2/72/members":
+            return {
+                "houseRollCallVoteMemberVotes": {
+                    "congress": 119,
+                    "legislationNumber": "2",
+                    "legislationType": "HR",
+                    "result": "Passed",
+                    "results": [{"bioguideID": "R000000", "voteCast": "Yea"}],
+                    "rollCallNumber": "72",
+                    "sessionNumber": 2,
+                    "startDate": "2026-01-02T12:00:00-05:00",
+                    "voteQuestion": "On Motion to Recommit",
+                    "voteType": "Yea and Nay",
+                }
+            }
+        if endpoint == "bill/119/hr/1":
             return {"bill": {"latestTitle": "Example Act"}}
         return {"houseRollCallVoteMemberVotes": {"results": []}}
 
@@ -115,19 +131,28 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
     response = client.get("/member/R000000/votes")
 
     assert response.status_code == 200
-    assert response.get_json()["votes"] == [{
+    votes = response.get_json()["votes"]
+    assert votes[0] == {
         "bill": {"number": "1", "title": "Example Act", "type": "HR"},
         "chamber": "House",
         "congress": 119,
         "date": "2026-01-01T12:00:00-05:00",
         "description": "Example Act",
+        "interpretation": {
+            "issue": "Other policy votes",
+            "kind": "policy",
+            "priority": 0,
+            "summary": "Substantive policy vote related to Example Act.",
+        },
         "position": "Aye",
         "question": "On Passage",
         "result": "Passed",
         "rollCall": "74",
         "session": 2,
+        "source": "congress.gov",
         "type": "Yea and Nay",
-    }]
+    }
+    assert votes[1]["interpretation"]["kind"] == "procedural"
 
     second_response = client.get("/member/A000001/votes")
 
@@ -202,13 +227,140 @@ def test_votes_endpoint_filters_senate_roll_call_xml(monkeypatch):
         "date": "24-Jun",
         "description": "Motion to Proceed to S. J. Res. 185; A joint resolution to direct the removal of United States Armed Forces from hostilities.",
         "document": "S.J.Res.185",
+        "interpretation": {
+            "issue": "Procedure",
+            "kind": "procedural",
+            "priority": 1,
+            "summary": "Procedural vote that shaped debate, timing, or floor handling rather than directly deciding policy.",
+        },
         "position": "Yea",
         "question": "On the Motion to Proceed",
         "result": "Rejected (47-50)",
         "rollCall": "192",
         "session": "2",
+        "source": "senate.gov",
         "type": "On the Motion to Proceed",
     }]
+
+
+def test_policy_snapshot_prioritizes_policy_votes():
+    votes = [
+        {
+            "bill": {"title": "House rule", "type": "HRES", "number": "1"},
+            "date": "2026-02-24",
+            "description": "On Ordering the Previous Question",
+            "question": "On Ordering the Previous Question",
+        },
+        {
+            "bill": {"title": "Defense funding bill", "type": "HR", "number": "2"},
+            "date": "2026-02-25",
+            "description": "Defense funding bill",
+            "question": "On Passage",
+        },
+    ]
+
+    snapshot = backend.policy_snapshot(votes, 2)
+
+    assert snapshot[0]["bill"]["number"] == "2"
+    assert snapshot[0]["interpretation"]["kind"] == "policy"
+    assert snapshot[1]["interpretation"]["kind"] == "procedural"
+
+
+def test_vote_kind_treats_suspend_rules_bill_votes_as_policy():
+    vote = {
+        "bill": {"title": "Veterans Health Care Improvement Act", "type": "HR", "number": "6329"},
+        "description": "Veterans Health Care Improvement Act",
+        "question": "On Motion to Suspend the Rules and Pass",
+    }
+
+    assert backend.vote_kind(vote) == "policy"
+
+
+def test_vote_kind_keeps_house_rules_votes_procedural():
+    vote = {
+        "bill": {"title": "Providing for consideration of H.R. 6329", "type": "HRES", "number": "1075"},
+        "description": "On Agreeing to the Resolution",
+        "question": "On Agreeing to the Resolution",
+    }
+
+    assert backend.vote_kind(vote) == "procedural"
+
+
+def test_congress_legislation_endpoint_converts_public_bill_urls():
+    assert backend.congress_legislation_endpoint(
+        "https://www.congress.gov/bill/119/house-bill/6329"
+    ) == "bill/119/hr/6329"
+    assert backend.congress_legislation_endpoint(
+        "https://www.congress.gov/bill/119/senate-bill/2503"
+    ) == "bill/119/s/2503"
+
+
+def test_build_stance_profile_groups_policy_tendencies(monkeypatch):
+    monkeypatch.setattr(backend, "gemini_generate_json", lambda prompt: None)
+    votes = [
+        {
+            "bill": {"title": "Homeowner Energy Freedom Act", "type": "HR", "number": "4758"},
+            "description": "Homeowner Energy Freedom Act",
+            "position": "Yea",
+            "question": "On Passage",
+        },
+        {
+            "bill": {"title": "Home Appliance Protection and Affordability Act", "type": "HR", "number": "4626"},
+            "description": "Home Appliance Protection and Affordability Act",
+            "position": "Nay",
+            "question": "On Passage",
+        },
+        {
+            "bill": {"title": "Providing for consideration of H.R. 6329", "type": "HRES", "number": "1075"},
+            "description": "On Ordering the Previous Question",
+            "position": "Yea",
+            "question": "On Ordering the Previous Question",
+        },
+    ]
+
+    profile = backend.build_stance_profile(votes, 5)
+
+    assert profile["aiSummary"]["provider"] == "unavailable"
+    assert profile["policyVoteCount"] == 2
+    assert profile["scannedVoteCount"] == 3
+    assert "Analyzed 2 substantive policy votes from 3 recent roll calls" in profile["caveat"]
+    assert profile["issues"][0]["issue"] == "Energy & environment"
+    assert profile["issues"][0]["supported"] == 1
+    assert profile["issues"][0]["opposed"] == 1
+    assert profile["issues"][0]["direction"] == "mixed"
+    assert len(profile["notableVotes"]) == 2
+
+
+def test_ai_stance_summary_uses_gemini_when_configured(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    response = Mock()
+    response.status_code = 200
+    response.json.return_value = {
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "text": json.dumps({
+                        "headline": "Shows mixed energy votes.",
+                        "takeaways": ["Supported one energy measure.", "Opposed one energy measure."],
+                        "caveats": ["Small sample."],
+                    })
+                }]
+            }
+        }]
+    }
+    post_mock = Mock(return_value=response)
+    monkeypatch.setattr(backend._session, "post", post_mock)
+
+    summary = backend.ai_stance_summary(
+        [{"issue": "Energy & environment", "supported": 1, "opposed": 1, "direction": "mixed"}],
+        [],
+        12,
+        8,
+    )
+
+    assert summary["provider"] == "gemini"
+    assert summary["headline"] == "Shows mixed energy votes."
+    assert post_mock.call_args.kwargs["params"] == {"key": "test-gemini-key"}
 
 
 def test_congress_error_message_handles_string_errors():

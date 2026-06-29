@@ -51,15 +51,20 @@ CONGRESS_CIVIC_API_KEY=your_api_key_here
 CACHE_TTL_SECONDS=900
 CORS_ORIGINS=http://localhost:5173
 REQUEST_TIMEOUT_SECONDS=10
-HOUSE_VOTE_SCAN_LIMIT=10
+HOUSE_VOTE_SCAN_LIMIT=30
 HOUSE_VOTE_SESSIONS=119:2
-SENATE_VOTE_SCAN_LIMIT=10
+SENATE_VOTE_SCAN_LIMIT=30
 SENATE_VOTE_SESSIONS=119:2
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+STANCE_EVIDENCE_LIMIT=20
 ```
 
 For deployment, set `VITE_API_BASE_URL` to the hosted Flask API URL and set `CORS_ORIGINS` to the hosted frontend origin. Use comma-separated origins when more than one frontend host needs access.
 
-House votes are loaded from Congress.gov roll-call data, and Senate votes are loaded from Senate.gov roll-call XML. The backend builds cached vote indexes, then reuses them for fast member lookups. Keep the vote scan limits and sessions small for responsive local use; increase them only when you need deeper history.
+House votes are loaded from Congress.gov roll-call data, and Senate votes are loaded from Senate.gov roll-call XML. The backend builds cached vote indexes, then reuses them for fast member lookups. `HOUSE_VOTE_SCAN_LIMIT` and `SENATE_VOTE_SCAN_LIMIT` control how many recent roll calls are scanned per chamber/session; `STANCE_EVIDENCE_LIMIT` controls how many substantive policy votes are sent to Gemini for reasoning.
+
+Policy profiles use deterministic vote classification first. If `GEMINI_API_KEY` is configured with a Google AI Studio key, the backend asks Gemini Flash to produce a cautious, voter-facing explanation from the classified evidence. Without a Gemini key, the app falls back to a rule-based summary.
 
 ## Running locally
 

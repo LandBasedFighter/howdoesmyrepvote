@@ -38,6 +38,7 @@ function formatVoteMeta(vote) {
 }
 
 function sourceLabel(type, items) {
+  if (type === "profile") return "Source: normalized recent roll-call votes"
   if (type === "legislation") return "Source: Congress.gov"
   if (items.some(item => item.source === "senate.gov")) return "Source: Senate.gov roll call XML"
   return "Source: Congress.gov House roll call data"
@@ -116,6 +117,7 @@ function ResultsSkeleton() {
 function MemberCard({ member, chamber }) {
   const [bills, setBills] = useState([])
   const [votes, setVotes] = useState([])
+  const [profile, setProfile] = useState(null)
   const [loadingType, setLoadingType] = useState("")
   const [expandedType, setExpandedType] = useState("")
   const [memberError, setMemberError] = useState("")
@@ -132,13 +134,16 @@ function MemberCard({ member, chamber }) {
     setDetailsNote("")
     try {
       const endpoint = type === "votes" ? "votes" : "legislation"
-      const res = await fetch(`${API_BASE_URL}/member/${member.bioguideId}/${endpoint}?limit=${ITEMS_PER_PAGE}`)
+      const detailEndpoint = type === "profile" ? "stance" : endpoint
+      const res = await fetch(`${API_BASE_URL}/member/${member.bioguideId}/${detailEndpoint}?limit=${ITEMS_PER_PAGE}`)
       const data = await res.json()
       if (data.error) {
         setMemberError(data.error)
         return
       }
-      if (type === "votes") {
+      if (type === "profile") {
+        setProfile(data.profile || null)
+      } else if (type === "votes") {
         setVotes(data.votes || [])
         setDetailsNote(data.note || "")
       } else {
@@ -169,6 +174,11 @@ function MemberCard({ member, chamber }) {
       </div>
 
       <div className="member-actions">
+        <button className="secondary-button" onClick={() => fetchMemberDetails("profile")} disabled={Boolean(loadingType)}>
+          <LoadingButtonContent loading={loadingType === "profile"} loadingText="Building profile">
+            {expandedType === "profile" ? "Hide profile" : "Policy profile"}
+          </LoadingButtonContent>
+        </button>
         <button className="secondary-button" onClick={() => fetchMemberDetails("votes")} disabled={Boolean(loadingType)}>
           <LoadingButtonContent loading={loadingType === "votes"} loadingText="Loading votes">
             {expandedType === "votes" ? "Hide votes" : "Recent votes"}
@@ -185,13 +195,82 @@ function MemberCard({ member, chamber }) {
       {detailsNote && expandedType === "votes" && <p className="detail-note">{detailsNote}</p>}
       {loadingType && <DetailSkeletonList label={`Loading ${loadingType}`} />}
 
-      {!loadingType && expandedType && expandedItems.length > 0 && (
+      {!loadingType && expandedType === "profile" && profile && (
+        <div className="details-panel">
+          {profile.aiSummary && (
+            <div className="ai-summary-card">
+              <div className="ai-summary-label">
+                {profile.aiSummary.provider === "gemini" ? "Gemini Flash analysis" : "Gemini analysis unavailable"}
+              </div>
+              <div className="ai-summary-headline">{profile.aiSummary.headline}</div>
+              {profile.aiSummary.takeaways?.length > 0 && (
+                <ul className="ai-takeaways">
+                  {profile.aiSummary.takeaways.map(takeaway => <li key={takeaway}>{takeaway}</li>)}
+                </ul>
+              )}
+              {profile.aiSummary.caveats?.length > 0 && (
+                <div className="ai-caveat">{profile.aiSummary.caveats[0]}</div>
+              )}
+            </div>
+          )}
+          <div className="profile-caveat">{profile.caveat}</div>
+          {profile.issues.length > 0 ? (
+            <div className="issue-list">
+              {profile.issues.map(issue => (
+                <div key={issue.issue} className="issue-card">
+                  <div>
+                    <div className="issue-title">{issue.issue}</div>
+                    <div className="issue-direction">{issue.direction} · {issue.confidence}</div>
+                  </div>
+                  <div className="issue-counts">
+                    <span>{issue.supported} supported</span>
+                    <span>{issue.opposed} opposed</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="empty-state">Not enough substantive votes in the scanned snapshot.</p>
+          )}
+          {profile.notableVotes.length > 0 && (
+            <>
+              <div className="section-label">Evidence votes</div>
+              <ul className="detail-list">
+                {profile.notableVotes.map((vote, i) => (
+                  <li key={`${vote.rollCall}-${vote.date}-${i}`} className="detail-item">
+                    <span className="vote-kind vote-kind-policy">Policy vote</span>
+                    <div className="detail-title">{vote.description || "Vote details unavailable"}</div>
+                    <div className="detail-meta">
+                      {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
+                    </div>
+                    <div className="vote-row">
+                      <span className="vote-position">{vote.position || "Position unavailable"}</span>
+                      {vote.result && <span>{vote.result}</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <div className="source-line">{sourceLabel("profile", [])}</div>
+        </div>
+      )}
+
+      {!loadingType && expandedType !== "profile" && expandedType && expandedItems.length > 0 && (
         <div className="details-panel">
           <ul className="detail-list">
             {expandedType === "votes"
               ? expandedItems.map((vote, i) => (
                 <li key={`${vote.rollCall}-${vote.date}-${i}`} className="detail-item">
+                  {vote.interpretation?.kind && (
+                    <span className={`vote-kind vote-kind-${vote.interpretation.kind}`}>
+                      {vote.interpretation.kind === "policy" ? "Policy vote" : "Procedural vote"}
+                    </span>
+                  )}
                   <div className="detail-title">{vote.description || "Vote details unavailable"}</div>
+                  {vote.interpretation?.summary && (
+                    <div className="vote-summary">{vote.interpretation.summary}</div>
+                  )}
                   {vote.question && vote.question !== vote.description && (
                     <div className="vote-question">{vote.question}</div>
                   )}
@@ -220,7 +299,7 @@ function MemberCard({ member, chamber }) {
         </div>
       )}
 
-      {!loadingType && expandedType && expandedItems.length === 0 && !memberError && (
+      {!loadingType && expandedType !== "profile" && expandedType && expandedItems.length === 0 && !memberError && (
         <p className="empty-state">No {expandedType === "votes" ? "recent votes" : "sponsored legislation"} found.</p>
       )}
     </article>
