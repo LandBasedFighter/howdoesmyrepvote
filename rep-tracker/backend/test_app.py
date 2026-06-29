@@ -1,5 +1,6 @@
 import os
 from unittest.mock import Mock
+import xml.etree.ElementTree as ET
 
 os.environ.setdefault("CONGRESS_CIVIC_API_KEY", "test-key")
 
@@ -46,6 +47,11 @@ def test_find_representatives_matches_current_chamber_and_district(monkeypatch):
 
     assert representative["name"] == "Current House Member"
     assert [senator["name"] for senator in senators] == ["Old House Member", "Senator One"]
+
+
+def test_current_term_supports_profile_and_list_shapes():
+    assert backend.last_chamber({"terms": {"item": [{"chamber": "Senate"}]}}) == "Senate"
+    assert backend.last_chamber({"terms": [{"chamber": "House of Representatives"}]}) == "House of Representatives"
 
 
 def test_reps_endpoint_returns_geocoded_members(monkeypatch):
@@ -128,6 +134,81 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
     assert second_response.status_code == 200
     assert second_response.get_json()["votes"][0]["position"] == "Nay"
     assert calls.count("house-vote/119/2") == 1
+
+
+def test_votes_endpoint_filters_senate_roll_call_xml(monkeypatch):
+    menu_xml = ET.fromstring("""
+        <vote_summary>
+          <votes>
+            <vote><vote_number>00192</vote_number></vote>
+          </votes>
+        </vote_summary>
+    """)
+    detail_xml = ET.fromstring("""
+        <roll_call_vote>
+          <congress>119</congress>
+          <session>2</session>
+          <vote_number>192</vote_number>
+          <vote_date>24-Jun</vote_date>
+          <vote_title>Motion to Proceed to S. J. Res. 185; A joint resolution to direct the removal of United States Armed Forces from hostilities.</vote_title>
+          <question>On the Motion to Proceed</question>
+          <vote_result_text>Rejected (47-50)</vote_result_text>
+          <document>
+            <document_type>S.J.Res.</document_type>
+            <document_number>185</document_number>
+            <document_name>S.J.Res.185</document_name>
+          </document>
+          <members>
+            <member>
+              <last_name>Ossoff</last_name>
+              <first_name>Jon</first_name>
+              <state>GA</state>
+              <vote_cast>Yea</vote_cast>
+            </member>
+            <member>
+              <last_name>Warnock</last_name>
+              <first_name>Raphael</first_name>
+              <state>GA</state>
+              <vote_cast>Nay</vote_cast>
+            </member>
+          </members>
+        </roll_call_vote>
+    """)
+
+    def fake_fetch_xml(url):
+        if "vote_menu_119_2.xml" in url:
+            return {"xml": menu_xml}
+        return {"xml": detail_xml}
+
+    monkeypatch.setattr(backend, "SENATE_VOTE_SESSIONS", [(119, 2)])
+    monkeypatch.setattr(backend, "member_profile", lambda bioguide_id: {
+        "lastName": "Ossoff",
+        "terms": {"item": [{"chamber": "Senate", "stateCode": "GA"}]},
+    })
+    monkeypatch.setattr(backend, "fetch_xml", fake_fetch_xml)
+
+    client = backend.app.test_client()
+    response = client.get("/member/O000000/votes")
+
+    assert response.status_code == 200
+    assert response.get_json()["votes"] == [{
+        "bill": {
+            "number": "185",
+            "title": "Motion to Proceed to S. J. Res. 185; A joint resolution to direct the removal of United States Armed Forces from hostilities.",
+            "type": "S.J.Res.",
+        },
+        "chamber": "Senate",
+        "congress": "119",
+        "date": "24-Jun",
+        "description": "Motion to Proceed to S. J. Res. 185; A joint resolution to direct the removal of United States Armed Forces from hostilities.",
+        "document": "S.J.Res.185",
+        "position": "Yea",
+        "question": "On the Motion to Proceed",
+        "result": "Rejected (47-50)",
+        "rollCall": "192",
+        "session": "2",
+        "type": "On the Motion to Proceed",
+    }]
 
 
 def test_congress_error_message_handles_string_errors():

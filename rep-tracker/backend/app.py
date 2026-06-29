@@ -1,5 +1,6 @@
 from threading import Lock
 from time import monotonic
+import xml.etree.ElementTree as ET
 import os
 
 from dotenv import load_dotenv
@@ -18,6 +19,13 @@ HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "10"))
 HOUSE_VOTE_SESSIONS = [
     tuple(int(part) for part in session.strip().split(":", 1))
     for session in os.getenv("HOUSE_VOTE_SESSIONS", "119:2").split(",")
+    if session.strip()
+]
+SENATE_BASE_URL = "https://www.senate.gov/legislative/LIS"
+SENATE_VOTE_SCAN_LIMIT = int(os.getenv("SENATE_VOTE_SCAN_LIMIT", "10"))
+SENATE_VOTE_SESSIONS = [
+    tuple(int(part) for part in session.strip().split(":", 1))
+    for session in os.getenv("SENATE_VOTE_SESSIONS", "119:2").split(",")
     if session.strip()
 ]
 
@@ -91,6 +99,25 @@ def congress_error_message(response):
     return message or code
 
 
+def fetch_xml(url):
+    try:
+        res = _session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+        if res.status_code >= 400:
+            return {"error": f"Request failed: {res.status_code}", "statusCode": res.status_code}
+        return {"xml": ET.fromstring(res.content)}
+    except ET.ParseError:
+        return {"error": "XML response could not be parsed", "statusCode": 502}
+    except requests.exceptions.RequestException:
+        return {"error": "XML request failed", "statusCode": 502}
+
+
+def xml_text(node, path, default=None):
+    found = node.find(path)
+    if found is None or found.text is None:
+        return default
+    return " ".join(found.text.split())
+
+
 def congress_state_members(state_code):
     def fetch_members():
         state_members = []
@@ -106,6 +133,16 @@ def congress_state_members(state_code):
         return state_members
 
     return cached(("state-members", state_code), fetch_members)
+
+
+def member_profile(bioguide_id):
+    def fetch_profile():
+        data = congress_get(f"member/{bioguide_id}")
+        if data.get("error"):
+            return data
+        return data.get("member", {})
+
+    return cached(("member-profile", bioguide_id), fetch_profile)
 
 
 def geocode_address(address):
@@ -138,7 +175,36 @@ def geocode_address(address):
 
 
 def last_chamber(member):
-    return member.get("terms", {}).get("item", [{}])[-1].get("chamber", "")
+    return current_term(member).get("chamber", "")
+
+
+def current_term(member):
+    terms = member.get("terms", {})
+    if isinstance(terms, dict):
+        items = terms.get("item", [])
+    elif isinstance(terms, list):
+        items = terms
+    else:
+        items = []
+    if isinstance(items, dict):
+        items = [items]
+    return items[-1] if items else {}
+
+
+def member_state_code(member):
+    term_state = current_term(member).get("stateCode")
+    if term_state:
+        return term_state
+    state = member.get("state")
+    return state if isinstance(state, str) and len(state) == 2 else None
+
+
+def normalize_name_key(value):
+    return "".join(ch.lower() for ch in (value or "") if ch.isalnum())
+
+
+def senate_member_key(member):
+    return (normalize_name_key(member.get("lastName")), member_state_code(member))
 
 
 def normalize_policy_area(policy_area):
@@ -267,6 +333,84 @@ def house_vote_index():
     )
 
 
+def senate_vote_menu_url(congress, session):
+    return f"{SENATE_BASE_URL}/roll_call_lists/vote_menu_{congress}_{session}.xml"
+
+
+def senate_vote_detail_url(congress, session, vote_number):
+    return (
+        f"{SENATE_BASE_URL}/roll_call_votes/vote{congress}{session}/"
+        f"vote_{congress}_{session}_{str(vote_number).zfill(5)}.xml"
+    )
+
+
+def normalize_senate_member_vote(vote, member_vote):
+    document_type = xml_text(vote, "document/document_type")
+    document_number = xml_text(vote, "document/document_number")
+    document_name = xml_text(vote, "document/document_name")
+    title = xml_text(vote, "vote_title") or xml_text(vote, "document/document_title")
+    question = xml_text(vote, "question") or xml_text(vote, "vote_question_text")
+    return {
+        "bill": {
+            "number": document_number,
+            "title": title,
+            "type": document_type,
+        },
+        "chamber": "Senate",
+        "congress": xml_text(vote, "congress"),
+        "date": xml_text(vote, "vote_date"),
+        "description": title or xml_text(vote, "vote_document_text") or question,
+        "document": document_name,
+        "position": xml_text(member_vote, "vote_cast"),
+        "question": question,
+        "result": xml_text(vote, "vote_result_text") or xml_text(vote, "vote_result"),
+        "rollCall": xml_text(vote, "vote_number"),
+        "session": xml_text(vote, "session"),
+        "type": question,
+    }
+
+
+def senate_vote_member_key(member_vote):
+    return (
+        normalize_name_key(xml_text(member_vote, "last_name")),
+        xml_text(member_vote, "state"),
+    )
+
+
+def build_senate_vote_index():
+    votes_by_member = {}
+    for congress, session in SENATE_VOTE_SESSIONS:
+        menu = fetch_xml(senate_vote_menu_url(congress, session))
+        if menu.get("error"):
+            return menu
+
+        vote_numbers = [
+            xml_text(vote, "vote_number")
+            for vote in menu["xml"].findall("./votes/vote")[:SENATE_VOTE_SCAN_LIMIT]
+        ]
+        for vote_number in filter(None, vote_numbers):
+            detail = fetch_xml(senate_vote_detail_url(congress, session, vote_number))
+            if detail.get("error"):
+                return detail
+
+            vote = detail["xml"]
+            for member_vote in vote.findall("./members/member"):
+                key = senate_vote_member_key(member_vote)
+                if key[0] and key[1]:
+                    votes_by_member.setdefault(key, []).append(
+                        normalize_senate_member_vote(vote, member_vote)
+                    )
+
+    return {"source": "senate.gov", "votesByMember": votes_by_member}
+
+
+def senate_vote_index():
+    return cached(
+        ("senate-vote-index", tuple(SENATE_VOTE_SESSIONS), SENATE_VOTE_SCAN_LIMIT),
+        build_senate_vote_index,
+    )
+
+
 def find_representatives(state, district):
     district_num = int(district)
     state_members = congress_state_members(state)
@@ -355,6 +499,18 @@ def get_member_votes(bioguide_id):
     limit = get_int_arg("limit", MAX_VOTES, 1, 25)
 
     def fetch_votes():
+        profile = member_profile(bioguide_id)
+        if profile.get("error"):
+            return profile
+        if last_chamber(profile) == "Senate":
+            index = senate_vote_index()
+            if index.get("error"):
+                return index
+            return {
+                "votes": index.get("votesByMember", {}).get(senate_member_key(profile), [])[:limit],
+                "source": index.get("source"),
+            }
+
         index = house_vote_index()
         if index.get("error"):
             return index
