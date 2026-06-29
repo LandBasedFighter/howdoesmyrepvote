@@ -1,6 +1,6 @@
 # How Did Your Rep Vote?
 
-A React and Flask app for looking up congressional representatives by address, then viewing recent member votes and sponsored legislation from Congress.gov.
+A React and Flask app for looking up congressional representatives by address, then viewing recent House roll-call votes and sponsored legislation from Congress.gov.
 
 ## Project layout
 
@@ -51,9 +51,13 @@ CONGRESS_CIVIC_API_KEY=your_api_key_here
 CACHE_TTL_SECONDS=900
 CORS_ORIGINS=http://localhost:5173
 REQUEST_TIMEOUT_SECONDS=10
+HOUSE_VOTE_SCAN_LIMIT=10
+HOUSE_VOTE_SESSIONS=119:2
 ```
 
 For deployment, set `VITE_API_BASE_URL` to the hosted Flask API URL and set `CORS_ORIGINS` to the hosted frontend origin. Use comma-separated origins when more than one frontend host needs access.
+
+Congress.gov currently exposes beta House roll-call vote data through `/house-vote`; Senate votes are not available from that API. The backend builds a cached `bioguideId -> votes` index from the scanned House sessions, then reuses it for fast member lookups. Keep `HOUSE_VOTE_SCAN_LIMIT` and `HOUSE_VOTE_SESSIONS` small for responsive local use; increase them only when you need deeper history.
 
 ## Running locally
 

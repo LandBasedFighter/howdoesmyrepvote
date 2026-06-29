@@ -38,6 +38,7 @@ function MemberCard({ member, chamber }) {
   const [loadingType, setLoadingType] = useState("")
   const [expandedType, setExpandedType] = useState("")
   const [memberError, setMemberError] = useState("")
+  const [detailsNote, setDetailsNote] = useState("")
   const [page, setPage] = useState(1)
 
   async function fetchMemberDetails(type) {
@@ -48,6 +49,7 @@ function MemberCard({ member, chamber }) {
 
     setLoadingType(type)
     setMemberError("")
+    setDetailsNote("")
     try {
       const endpoint = type === "votes" ? "votes" : "legislation"
       const res = await fetch(`${API_BASE_URL}/member/${member.bioguideId}/${endpoint}`)
@@ -58,6 +60,7 @@ function MemberCard({ member, chamber }) {
       }
       if (type === "votes") {
         setVotes(data.votes || [])
+        setDetailsNote(data.note || "")
       } else {
         setBills(data.bills || [])
       }
@@ -98,6 +101,7 @@ function MemberCard({ member, chamber }) {
       </div>
 
       {memberError && <p className="inline-error">{memberError}</p>}
+      {detailsNote && expandedType === "votes" && <p className="detail-note">{detailsNote}</p>}
 
       {expandedType && expandedItems.length > 0 && (
         <div className="details-panel">
@@ -106,6 +110,9 @@ function MemberCard({ member, chamber }) {
               ? pagedItems.map((vote, i) => (
                 <li key={`${vote.rollCall}-${vote.date}-${i}`} className="detail-item">
                   <div className="detail-title">{vote.description || "Vote details unavailable"}</div>
+                  {vote.question && vote.question !== vote.description && (
+                    <div className="vote-question">{vote.question}</div>
+                  )}
                   <div className="detail-meta">
                     {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
                   </div>
