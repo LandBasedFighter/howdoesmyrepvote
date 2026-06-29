@@ -3,6 +3,8 @@ import json
 from unittest.mock import Mock
 import xml.etree.ElementTree as ET
 
+import requests
+
 os.environ.setdefault("CONGRESS_CIVIC_API_KEY", "test-key")
 
 import app as backend
@@ -28,6 +30,19 @@ def test_cached_reuses_value_until_cleared():
     assert backend.cached(("key",), fetcher) == {"value": 2}
 
 
+def test_cached_honors_custom_cache_predicate():
+    calls = {"count": 0}
+
+    def fetcher():
+        calls["count"] += 1
+        return {"value": calls["count"]}
+
+    assert backend.cached(("custom",), fetcher, should_cache=lambda value: value["value"] > 1) == {"value": 1}
+    assert backend.cached(("custom",), fetcher, should_cache=lambda value: value["value"] > 1) == {"value": 2}
+    assert backend.cached(("custom",), fetcher, should_cache=lambda value: value["value"] > 1) == {"value": 2}
+    assert calls["count"] == 2
+
+
 def test_find_representatives_matches_current_chamber_and_district(monkeypatch):
     monkeypatch.setattr(backend, "congress_state_members", lambda state: [
         {
@@ -50,13 +65,26 @@ def test_find_representatives_matches_current_chamber_and_district(monkeypatch):
     assert [senator["name"] for senator in senators] == ["Old House Member", "Senator One"]
 
 
+def test_find_representatives_matches_at_large_member(monkeypatch):
+    monkeypatch.setattr(backend, "congress_state_members", lambda state: [
+        {"name": "At Large Rep", "terms": {"item": [{"chamber": "House of Representatives"}]}},
+        {"name": "Senator One", "terms": {"item": [{"chamber": "Senate"}]}},
+    ])
+
+    representative, senators = backend.find_representatives("VT", "AL")
+
+    assert representative["name"] == "At Large Rep"
+    assert backend.district_label("VT", "AL") == "VT-AL"
+
+
 def test_current_term_supports_profile_and_list_shapes():
     assert backend.last_chamber({"terms": {"item": [{"chamber": "Senate"}]}}) == "Senate"
     assert backend.last_chamber({"terms": [{"chamber": "House of Representatives"}]}) == "House of Representatives"
 
 
 def test_reps_endpoint_returns_geocoded_members(monkeypatch):
-    monkeypatch.setattr(backend, "geocode_address", lambda address: ("NY", "12"))
+    monkeypatch.setattr(backend, "geocode_address", lambda address: ("NY", "12", "New York"))
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers much of Manhattan.")
     monkeypatch.setattr(backend, "find_representatives", lambda state, district: (
         {"name": "Rep Example"},
         [{"name": "Senator Example"}],
@@ -68,10 +96,72 @@ def test_reps_endpoint_returns_geocoded_members(monkeypatch):
     assert response.status_code == 200
     assert response.get_json() == {
         "district": "12",
+        "districtDescription": "Covers much of Manhattan.",
+        "districtLabel": "NY-12",
         "representative": {"name": "Rep Example"},
         "senators": [{"name": "Senator Example"}],
         "state": "NY",
     }
+
+
+def test_compact_district_extract_prefers_geography_over_tautology():
+    extract = (
+        "Georgia's 4th congressional district is a congressional district in Georgia. "
+        "The district is based in the eastern suburbs of Atlanta, encompassing parts of DeKalb, Gwinnett, and Newton counties. "
+        "It has changed after redistricting."
+    )
+
+    assert backend.compact_district_extract(extract) == (
+        "Based in the eastern suburbs of Atlanta, encompassing parts of DeKalb, Gwinnett, and Newton counties."
+    )
+
+
+def test_compact_district_extract_skips_incumbent_history_sentences():
+    extract = (
+        "The district was represented by Democrat John Lewis from January 3, 1987, until his death on July 17, 2020. "
+        "The district includes central Atlanta and nearby communities in Fulton, DeKalb, and Clayton counties."
+    )
+
+    assert backend.compact_district_extract(extract) == (
+        "District includes central Atlanta and nearby communities in Fulton, DeKalb, and Clayton counties."
+    )
+
+
+def test_compact_district_extract_removes_representative_clause_from_geography():
+    extract = (
+        "The redrawn District 12 includes the Upper West Side constituency represented by Nadler since the 1990s, "
+        "the Upper East Side, and all of Midtown Manhattan."
+    )
+
+    assert backend.compact_district_extract(extract) == (
+        "Redrawn District 12 includes the Upper West Side constituency, the Upper East Side, and all of Midtown Manhattan."
+    )
+
+
+def test_compact_district_extract_keeps_current_geography_over_old_boundary_history():
+    extract = (
+        "Texas's 16th congressional district of the United States House of Representatives includes almost all of El Paso "
+        "and most of its suburbs in the state of Texas. "
+        "However, after Texas' original 1960 district map was thrown out as a result of Wesberry v. Sanders, "
+        "the 16th was shrunk down to the city of El Paso and most of its surrounding suburban communities."
+    )
+
+    assert backend.compact_district_extract(extract, require_geography=True) == (
+        "Includes almost all of El Paso and most of its suburbs in the state of Texas."
+    )
+
+
+def test_district_area_description_falls_back_to_census_county(monkeypatch):
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: None)
+
+    assert backend.district_area_description("GA", "4", "DeKalb") == (
+        "GA-4 includes the area around this address in DeKalb County, GA. District lines can change after redistricting."
+    )
+
+
+def test_district_area_description_handles_at_large_statewide_districts():
+    assert backend.district_area_description("VT", "AL") == "Covers the entire state of Vermont."
+    assert backend.district_area_description("AK", "AL") == "Covers the entire state of Alaska."
 
 
 def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
@@ -377,8 +467,29 @@ def test_compact_vote_evidence_handles_missing_bill_summary(monkeypatch):
     assert evidence[0]["summary"] is None
 
 
+def test_compact_vote_evidence_does_not_fail_when_summary_lookup_raises(monkeypatch):
+    def fail_congress_get(endpoint, **params):
+        raise RuntimeError("summary lookup failed")
+
+    monkeypatch.setattr(backend, "congress_get", fail_congress_get)
+
+    evidence = backend.compact_vote_evidence([{
+        "bill": {"type": "HR", "number": "42", "title": "Energy Rebates Act"},
+        "congress": 119,
+        "description": "Energy Rebates Act",
+        "interpretation": {"issue": "Energy, climate & utilities"},
+        "position": "Yea",
+        "question": "On Passage",
+        "result": "Passed",
+    }])
+
+    assert evidence[0]["summary"] is None
+    assert evidence[0]["title"] == "Energy Rebates Act"
+
+
 def test_ai_stance_summary_uses_gemini_when_configured(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(backend, "GEMINI_FALLBACK_MODELS", [])
     response = Mock()
     response.status_code = 200
     response.json.return_value = {
@@ -406,7 +517,95 @@ def test_ai_stance_summary_uses_gemini_when_configured(monkeypatch):
 
     assert summary["provider"] == "gemini"
     assert summary["headline"] == "Shows mixed energy votes."
+    assert summary["model"] == backend.GEMINI_MODEL
     assert post_mock.call_args.kwargs["params"] == {"key": "test-gemini-key"}
+
+
+def test_ai_stance_summary_prompt_requires_voter_impact(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    captured = {}
+
+    def fake_generate(prompt):
+        captured["prompt"] = json.loads(prompt)
+        return {"headline": "Energy costs mattered.", "takeaways": [], "caveats": []}
+
+    monkeypatch.setattr(backend, "gemini_generate_json", fake_generate)
+
+    backend.ai_stance_summary([], [], 30, 15)
+
+    instruction = captured["prompt"]["instruction"]
+    assert "concrete, everyday tradeoffs" in instruction
+    assert "Energy costs:" in instruction
+    assert "Avoid vague phrases" in instruction
+
+
+def test_ai_stance_summary_normalizes_labeled_takeaway_objects(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(backend, "gemini_generate_json", lambda prompt: {
+        "headline": "Voter-facing summary.",
+        "takeaways": [
+            {"label": "Energy costs:", "message": "Opposed repealing home energy rebates."},
+            "Military action: Supported limiting unauthorized hostilities.",
+        ],
+        "caveats": [],
+    })
+
+    summary = backend.ai_stance_summary([], [], 30, 15)
+
+    assert summary["takeaways"] == [
+        "Energy costs: Opposed repealing home energy rebates.",
+        "Military action: Supported limiting unauthorized hostilities.",
+    ]
+
+
+def test_gemini_generate_json_retries_transient_failures(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(backend, "GEMINI_ATTEMPTS", 2)
+    monkeypatch.setattr(backend, "GEMINI_FALLBACK_MODELS", [])
+    monkeypatch.setattr(backend, "sleep", lambda seconds: None)
+    success = Mock()
+    success.status_code = 200
+    success.json.return_value = {
+        "candidates": [{
+            "content": {
+                "parts": [{"text": json.dumps({"headline": "Recovered"})}]
+            }
+        }]
+    }
+    post_mock = Mock(side_effect=[requests.exceptions.Timeout("slow"), success])
+    monkeypatch.setattr(backend._session, "post", post_mock)
+
+    result = backend.gemini_generate_json("{}")
+
+    assert result["headline"] == "Recovered"
+    assert result["_model"] == backend.GEMINI_MODEL
+    assert post_mock.call_count == 2
+
+
+def test_gemini_generate_json_tries_fallback_model_after_quota(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+    monkeypatch.setattr(backend, "GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(backend, "GEMINI_FALLBACK_MODELS", ["gemini-2.0-flash"])
+    quota = Mock()
+    quota.status_code = 429
+    success = Mock()
+    success.status_code = 200
+    success.json.return_value = {
+        "candidates": [{
+            "content": {
+                "parts": [{"text": json.dumps({"headline": "Fallback worked"})}]
+            }
+        }]
+    }
+    post_mock = Mock(side_effect=[quota, success])
+    monkeypatch.setattr(backend._session, "post", post_mock)
+
+    result = backend.gemini_generate_json("{}")
+
+    assert result["headline"] == "Fallback worked"
+    assert result["_model"] == "gemini-2.0-flash"
+    assert "models/gemini-2.5-flash" in post_mock.call_args_list[0].args[0]
+    assert "models/gemini-2.0-flash" in post_mock.call_args_list[1].args[0]
 
 
 def test_congress_error_message_handles_string_errors():
