@@ -68,15 +68,17 @@ function sourceLabel(type, items) {
   return "Source: Congress.gov House roll call data"
 }
 
-function LoadingSpinner() {
-  return <span className="loading-spinner" aria-hidden="true" />
-}
-
 function LoadingButtonContent({ loading, children, loadingText }) {
   return (
-    <span className="button-content">
-      {loading && <LoadingSpinner />}
+    <span className={`button-content ${loading ? "button-content-loading" : ""}`}>
       <span>{loading ? loadingText : children}</span>
+      {loading && (
+        <span className="loading-dots" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      )}
     </span>
   )
 }
@@ -398,8 +400,7 @@ function App() {
       {data && (
         <section className="results-section">
           <div className="results-header">
-            <p className="eyebrow">Results</p>
-            <div>
+            <div className="district-summary">
               <h2>{data.districtLabel ?? `${data.state}-${data.district}`}</h2>
               {data.districtDescription && <p className="district-description">{data.districtDescription}</p>}
             </div>
