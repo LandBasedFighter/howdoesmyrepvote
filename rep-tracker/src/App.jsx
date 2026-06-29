@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 5
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5000"
 
 function getPartyClass(partyName) {
@@ -22,14 +22,95 @@ function formatBillMeta(bill) {
   return parts.filter(Boolean)
 }
 
+function formatDateOnly(value) {
+  if (!value) return ""
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10)
+  return value.split(",")[0]
+}
+
 function formatVoteMeta(vote) {
   const bill = vote.bill ?? {}
   const parts = []
-  if (vote.chamber) parts.push(vote.chamber)
   if (vote.rollCall) parts.push(`Roll call ${vote.rollCall}`)
   if (bill.type && bill.number) parts.push(`${bill.type} ${bill.number}`)
-  if (vote.date) parts.push(vote.date)
+  if (vote.date) parts.push(formatDateOnly(vote.date))
   return parts
+}
+
+function sourceLabel(type, items) {
+  if (type === "legislation") return "Source: Congress.gov"
+  if (items.some(item => item.source === "senate.gov")) return "Source: Senate.gov roll call XML"
+  return "Source: Congress.gov House roll call data"
+}
+
+function LoadingSpinner() {
+  return <span className="loading-spinner" aria-hidden="true" />
+}
+
+function LoadingButtonContent({ loading, children, loadingText }) {
+  return (
+    <span className="button-content">
+      {loading && <LoadingSpinner />}
+      <span>{loading ? loadingText : children}</span>
+    </span>
+  )
+}
+
+function SkeletonLine({ width = "100%" }) {
+  return <span className="skeleton-line" style={{ width }} />
+}
+
+function DetailSkeletonList({ label }) {
+  return (
+    <div className="details-panel" aria-label={label} aria-live="polite">
+      <ul className="detail-list">
+        {[0, 1, 2].map(index => (
+          <li key={index} className="detail-item detail-skeleton">
+            <SkeletonLine width={index === 0 ? "82%" : "68%"} />
+            <SkeletonLine width="46%" />
+            <div className="skeleton-meta-row">
+              <SkeletonLine width="72px" />
+              <SkeletonLine width="96px" />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function ResultsSkeleton() {
+  return (
+    <section className="results-section results-skeleton" aria-live="polite" aria-label="Loading representatives">
+      <div className="results-header">
+        <div>
+          <SkeletonLine width="90px" />
+          <SkeletonLine width="280px" />
+        </div>
+      </div>
+      <div className="member-grid">
+        {[0, 1].map(group => (
+          <div key={group} className="result-group">
+            <SkeletonLine width={group === 0 ? "180px" : "130px"} />
+            <article className="member-card loading-card">
+              <div className="member-summary">
+                <span className="member-photo skeleton-avatar" />
+                <div className="member-details skeleton-member-details">
+                  <SkeletonLine width="96px" />
+                  <SkeletonLine width="180px" />
+                  <SkeletonLine width="92px" />
+                </div>
+              </div>
+              <div className="member-actions">
+                <SkeletonLine width="100%" />
+                <SkeletonLine width="100%" />
+              </div>
+            </article>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
 }
 
 function MemberCard({ member, chamber }) {
@@ -39,7 +120,6 @@ function MemberCard({ member, chamber }) {
   const [expandedType, setExpandedType] = useState("")
   const [memberError, setMemberError] = useState("")
   const [detailsNote, setDetailsNote] = useState("")
-  const [page, setPage] = useState(1)
 
   async function fetchMemberDetails(type) {
     if (expandedType === type) {
@@ -52,7 +132,7 @@ function MemberCard({ member, chamber }) {
     setDetailsNote("")
     try {
       const endpoint = type === "votes" ? "votes" : "legislation"
-      const res = await fetch(`${API_BASE_URL}/member/${member.bioguideId}/${endpoint}`)
+      const res = await fetch(`${API_BASE_URL}/member/${member.bioguideId}/${endpoint}?limit=${ITEMS_PER_PAGE}`)
       const data = await res.json()
       if (data.error) {
         setMemberError(data.error)
@@ -64,7 +144,6 @@ function MemberCard({ member, chamber }) {
       } else {
         setBills(data.bills || [])
       }
-      setPage(1)
       setExpandedType(type)
     } catch {
       setMemberError("Could not load member details from the local API.")
@@ -74,8 +153,6 @@ function MemberCard({ member, chamber }) {
   }
 
   const expandedItems = expandedType === "votes" ? votes : bills
-  const totalPages = Math.ceil(expandedItems.length / ITEMS_PER_PAGE)
-  const pagedItems = expandedItems.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
   const partyClass = getPartyClass(member.partyName)
 
   return (
@@ -93,21 +170,26 @@ function MemberCard({ member, chamber }) {
 
       <div className="member-actions">
         <button className="secondary-button" onClick={() => fetchMemberDetails("votes")} disabled={Boolean(loadingType)}>
-          {loadingType === "votes" ? "Loading votes..." : expandedType === "votes" ? "Hide votes" : "Recent votes"}
+          <LoadingButtonContent loading={loadingType === "votes"} loadingText="Loading votes">
+            {expandedType === "votes" ? "Hide votes" : "Recent votes"}
+          </LoadingButtonContent>
         </button>
         <button className="secondary-button" onClick={() => fetchMemberDetails("legislation")} disabled={Boolean(loadingType)}>
-          {loadingType === "legislation" ? "Loading bills..." : expandedType === "legislation" ? "Hide bills" : "Sponsored bills"}
+          <LoadingButtonContent loading={loadingType === "legislation"} loadingText="Loading bills">
+            {expandedType === "legislation" ? "Hide bills" : "Sponsored bills"}
+          </LoadingButtonContent>
         </button>
       </div>
 
       {memberError && <p className="inline-error">{memberError}</p>}
       {detailsNote && expandedType === "votes" && <p className="detail-note">{detailsNote}</p>}
+      {loadingType && <DetailSkeletonList label={`Loading ${loadingType}`} />}
 
-      {expandedType && expandedItems.length > 0 && (
+      {!loadingType && expandedType && expandedItems.length > 0 && (
         <div className="details-panel">
           <ul className="detail-list">
             {expandedType === "votes"
-              ? pagedItems.map((vote, i) => (
+              ? expandedItems.map((vote, i) => (
                 <li key={`${vote.rollCall}-${vote.date}-${i}`} className="detail-item">
                   <div className="detail-title">{vote.description || "Vote details unavailable"}</div>
                   {vote.question && vote.question !== vote.description && (
@@ -122,7 +204,7 @@ function MemberCard({ member, chamber }) {
                   </div>
                 </li>
               ))
-              : pagedItems.map((bill, i) => (
+              : expandedItems.map((bill, i) => (
                 <li key={`${bill.type}-${bill.number}-${i}`} className="detail-item">
                   <div className="detail-title">{bill.title ? bill.title : `Amendment ${bill.amendmentNumber}`}</div>
                   <div className="detail-meta">
@@ -134,25 +216,11 @@ function MemberCard({ member, chamber }) {
                 </li>
               ))}
           </ul>
-          {totalPages > 1 && (
-            <div className="pagination">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
-                className="ghost-button">
-                ← Prev
-              </button>
-              <span>
-                Page {page} of {totalPages}
-              </span>
-              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}
-                className="ghost-button">
-                Next →
-              </button>
-            </div>
-          )}
+          <div className="source-line">{sourceLabel(expandedType, expandedItems)}</div>
         </div>
       )}
 
-      {expandedType && expandedItems.length === 0 && !memberError && (
+      {!loadingType && expandedType && expandedItems.length === 0 && !memberError && (
         <p className="empty-state">No {expandedType === "votes" ? "recent votes" : "sponsored legislation"} found.</p>
       )}
     </article>
@@ -212,7 +280,9 @@ function App() {
               onKeyDown={e => e.key === "Enter" && fetchReps()}
             />
             <button className="primary-button" onClick={fetchReps} disabled={loading}>
-              {loading ? "Searching..." : "Search"}
+              <LoadingButtonContent loading={loading} loadingText="Searching">
+                Search
+              </LoadingButtonContent>
             </button>
           </div>
           <p className="helper-text">Powered by Census geocoding and Congress.gov data.</p>
@@ -220,7 +290,7 @@ function App() {
       </section>
 
       {error && <p className="status-message error">{error}</p>}
-      {loading && <p className="status-message">Looking up your representatives...</p>}
+      {loading && <ResultsSkeleton />}
 
       {data && (
         <section className="results-section">
