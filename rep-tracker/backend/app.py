@@ -1,9 +1,12 @@
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import unescape
 from threading import Lock
 from time import monotonic
 from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 import json
 import os
+import re
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -18,6 +21,7 @@ REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
 HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "30"))
+HOUSE_VOTE_WORKERS = int(os.getenv("HOUSE_VOTE_WORKERS", "6"))
 HOUSE_VOTE_SESSIONS = [
     tuple(int(part) for part in session.strip().split(":", 1))
     for session in os.getenv("HOUSE_VOTE_SESSIONS", "119:2").split(",")
@@ -292,16 +296,34 @@ POLICY_TERMS = (
 )
 
 ISSUE_TAXONOMY = {
-    "Energy & environment": ("energy", "environment", "appliance", "emission", "climate", "homeowner energy"),
-    "Defense & foreign policy": ("defense", "armed forces", "war powers", "iran", "ukraine", "hostilities"),
-    "Housing": ("housing", "homeownership", "homeowner", "mortgage", "affordability"),
-    "Healthcare": ("health", "medicaid", "medicare", "drug", "hospital", "veterans health"),
-    "Immigration & border": ("immigration", "border", "asylum", "deport", "visa"),
-    "Budget & taxes": ("appropriations", "budget", "tax", "spending", "debt", "revenue"),
-    "Education": ("education", "student loan", "school", "college"),
-    "Courts & nominations": ("judge", "judg", "nomination", "confirmed", "circuit judge", "district judge"),
-    "Government oversight": ("agency", "regulation", "information quality", "oversight", "rule submitted"),
+    "Cost of living & consumer rules": (
+        "affordability", "consumer", "credit", "fee", "price", "cost", "home appliance", "appliance",
+    ),
+    "Energy, climate & utilities": (
+        "energy", "environment", "emission", "climate", "utility", "pipeline", "public lands",
+    ),
+    "Defense, veterans & foreign policy": (
+        "defense", "armed forces", "war powers", "iran", "ukraine", "hostilities", "veteran",
+        "military", "ambassador", "foreign", "state department",
+    ),
+    "Housing & homeownership": ("housing", "homeownership", "homeowner", "mortgage", "rent", "zoning"),
+    "Healthcare": ("health", "medicaid", "medicare", "drug", "hospital", "veterans health", "care"),
+    "Immigration & border": ("immigration", "border", "asylum", "deport", "visa", "alien"),
+    "Budget, taxes & government spending": (
+        "appropriations", "budget", "tax", "spending", "debt", "revenue", "fiscal", "deficit",
+    ),
+    "Education & student loans": ("education", "student loan", "school", "college", "university"),
+    "Federal courts & nominations": (
+        "judge", "judg", "nomination", "confirmed", "circuit judge", "district judge", "pn ",
+    ),
+    "Federal agency rules & oversight": (
+        "agency", "regulation", "information quality", "oversight", "rule submitted", "disapprove",
+        "congressional review", "s.j.res.", "h.j.res.",
+    ),
+    "Civil rights & social policy": ("civil rights", "discrimination", "privacy", "abortion", "religious"),
 }
+
+LOW_INFORMATION_ISSUES = {"Federal courts & nominations"}
 
 
 def bill_text(vote):
@@ -330,10 +352,14 @@ def vote_text(vote):
 
 def classify_issue(vote):
     text = vote_text(vote)
+    bill = vote.get("bill") or {}
+    bill_type = str(bill.get("type") or "").lower()
+    if bill_type in {"pn", "nomination"} or "confirmation:" in text:
+        return "Federal courts & nominations"
     for issue, terms in ISSUE_TAXONOMY.items():
         if any(term in text for term in terms):
             return issue
-    return "Other policy votes"
+    return "Other recent policy"
 
 
 def vote_kind(vote):
@@ -374,7 +400,7 @@ def interpret_vote(vote):
         summary = "Procedural vote that shaped debate, timing, or floor handling rather than directly deciding policy."
     else:
         issue = classify_issue(vote)
-        issue_text = "policy" if issue == "Other policy votes" else issue.lower()
+        issue_text = "policy" if issue == "Other recent policy" else issue.lower()
         summary = f"Substantive {issue_text} vote related to {title}."
     return {
         "issue": classify_issue(vote) if kind == "policy" else "Procedure",
@@ -390,10 +416,8 @@ def enrich_vote(vote):
 
 def policy_snapshot(votes, limit):
     enriched = [enrich_vote(vote) for vote in votes]
-    return sorted(
-        enriched,
-        key=lambda vote: (vote["interpretation"]["priority"], vote.get("date") or ""),
-    )[:limit]
+    recent_first = sorted(enriched, key=lambda vote: vote.get("date") or "", reverse=True)
+    return sorted(recent_first, key=lambda vote: vote["interpretation"]["priority"])[:limit]
 
 
 def stance_from_position(position):
@@ -405,9 +429,78 @@ def stance_from_position(position):
     return "no_position"
 
 
+API_BILL_TYPE_MAP = {
+    "hr": "hr",
+    "h.r.": "hr",
+    "house bill": "hr",
+    "s": "s",
+    "s.": "s",
+    "senate bill": "s",
+    "hjres": "hjres",
+    "h.j.res.": "hjres",
+    "house joint resolution": "hjres",
+    "sjres": "sjres",
+    "s.j.res.": "sjres",
+    "senate joint resolution": "sjres",
+    "hconres": "hconres",
+    "h.con.res.": "hconres",
+    "house concurrent resolution": "hconres",
+    "sconres": "sconres",
+    "s.con.res.": "sconres",
+    "senate concurrent resolution": "sconres",
+    "hres": "hres",
+    "h.res.": "hres",
+    "house resolution": "hres",
+    "sres": "sres",
+    "s.res.": "sres",
+    "senate resolution": "sres",
+}
+
+
+def api_bill_type(value):
+    return API_BILL_TYPE_MAP.get(str(value or "").strip().casefold())
+
+
+def plain_text_summary(value, limit=300):
+    if not value:
+        return None
+    text = re.sub(r"<[^>]+>", " ", str(value))
+    text = " ".join(unescape(text).split())
+    if not text:
+        return None
+    return text if len(text) <= limit else f"{text[:limit].rstrip()}..."
+
+
+def vote_bill_summary(vote):
+    bill = vote.get("bill") or {}
+    congress = vote.get("congress")
+    bill_type = api_bill_type(bill.get("type"))
+    bill_number = bill.get("number")
+    if not congress or not bill_type or not bill_number:
+        return None
+
+    def fetch_summary():
+        data = congress_get(f"bill/{congress}/{bill_type}/{bill_number}/summaries")
+        if data.get("error"):
+            return None
+        summaries = data.get("summaries") or []
+        if not summaries:
+            return None
+        return plain_text_summary(summaries[0].get("text"))
+
+    return cached(("bill-summary", congress, bill_type, str(bill_number)), fetch_summary)
+
+
 def compact_vote_evidence(votes, limit=STANCE_EVIDENCE_LIMIT):
+    selected_votes = votes[:limit]
+    summaries = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(HOUSE_VOTE_WORKERS, len(selected_votes) or 1))) as executor:
+        future_map = {executor.submit(vote_bill_summary, vote): index for index, vote in enumerate(selected_votes)}
+        for future in as_completed(future_map):
+            summaries[future_map[future]] = future.result()
+
     compact = []
-    for vote in votes[:limit]:
+    for index, vote in enumerate(selected_votes):
         bill = vote.get("bill") or {}
         compact.append({
             "bill": f"{bill.get('type') or ''} {bill.get('number') or ''}".strip(),
@@ -415,31 +508,53 @@ def compact_vote_evidence(votes, limit=STANCE_EVIDENCE_LIMIT):
             "position": vote.get("position"),
             "question": vote.get("question"),
             "result": vote.get("result"),
+            "summary": summaries.get(index),
             "title": vote.get("description") or bill.get("title"),
         })
     return compact
 
 
+def diversified_policy_votes(policy_votes, limit, per_issue_limit=4):
+    diversified = []
+    issue_counts = {}
+    for vote in policy_snapshot(policy_votes, len(policy_votes)):
+        issue = vote.get("interpretation", {}).get("issue")
+        issue_limit = 2 if issue in LOW_INFORMATION_ISSUES else per_issue_limit
+        if issue_counts.get(issue, 0) >= issue_limit:
+            continue
+        diversified.append(vote)
+        issue_counts[issue] = issue_counts.get(issue, 0) + 1
+        if len(diversified) >= limit:
+            break
+    return diversified
+
+
 def unavailable_ai_summary():
     return {
         "provider": "unavailable",
-        "headline": "Gemini analysis unavailable for this request.",
+        "headline": "Policy analysis unavailable for this request.",
         "takeaways": [],
-        "caveats": ["Check GEMINI_API_KEY, GEMINI_MODEL, and Google AI Studio API access."],
+        "caveats": ["Contact me if this is a repeated issue. moguinyard@gmail.com."],
     }
 
 
 def ai_stance_summary(issues, evidence_votes, scan_count, policy_count):
+    if not get_gemini_api_key():
+        return unavailable_ai_summary()
+
     prompt = json.dumps({
         "instruction": (
             "You are a nonpartisan civic explainer writing for a median voter, not a policy expert. "
-            "Translate the voting pattern into plain English about everyday issues. "
+            "Translate the voting pattern into plain English about what the member tended to support or oppose. "
             "Avoid congressional jargon such as cloture, motion, roll call, and procedural unless it is essential. "
-            "Prioritize substantive policy votes over procedural votes. "
+            "Prioritize kitchen-table policy signals over repetitive nominations. "
+            "When nominations dominate the sample, state that clearly but do not make it the whole summary if other policy votes exist. "
+            "Use the summary field when present to explain what the bill or resolution would do in everyday terms. "
+            "Use the bill titles and results to explain the practical topic of the votes; do not simply restate issue bucket names. "
             "Summarize only what the vote evidence supports. "
             "Do not infer ideology, motives, or party loyalty beyond the votes shown. "
             "Return JSON with headline, takeaways (array of 2-4 short strings), and caveats (array). "
-            "Each takeaway should be short and understandable to someone deciding whether the member aligns with them."
+            "Each takeaway should be specific enough to help a voter decide whether the member aligns with them."
         ),
         "issue_counts": issues,
         "scan_context": {
@@ -489,9 +604,14 @@ def build_stance_profile(votes, limit):
             "totalVotes": total,
         })
 
-    issue_summaries.sort(key=lambda issue: issue["totalVotes"], reverse=True)
-    notable_votes = policy_snapshot(policy_votes, limit)
-    ai_evidence_votes = policy_snapshot(policy_votes, STANCE_EVIDENCE_LIMIT)
+    issue_summaries.sort(
+        key=lambda issue: (
+            issue["issue"] in LOW_INFORMATION_ISSUES and len(issue_summaries) > 1,
+            -issue["totalVotes"],
+        )
+    )
+    notable_votes = diversified_policy_votes(policy_votes, limit)
+    ai_evidence_votes = diversified_policy_votes(policy_votes, STANCE_EVIDENCE_LIMIT)
     return {
         "aiSummary": ai_stance_summary(issue_summaries[:5], ai_evidence_votes, len(votes), len(policy_votes)),
         "caveat": f"Analyzed {len(policy_votes)} substantive policy votes from {len(votes)} recent roll calls. This is a snapshot, not a full career scorecard.",
@@ -598,21 +718,39 @@ def build_house_vote_index():
         if vote_list.get("error"):
             return vote_list
 
-        for vote in vote_list.get("houseRollCallVotes", []):
+        roll_calls = [vote.get("rollCallNumber") for vote in vote_list.get("houseRollCallVotes", [])]
+
+        def fetch_detail(roll_call):
             detail = congress_get(
-                f"house-vote/{congress}/{session}/{vote.get('rollCallNumber')}/members"
+                f"house-vote/{congress}/{session}/{roll_call}/members"
             )
             if detail.get("error"):
                 return detail
 
             detail_vote = detail.get("houseRollCallVoteMemberVotes", {})
             detail_vote["enrichedTitle"] = vote_bill_title(detail_vote)
-            for member_vote in result_items(detail_vote.get("results")):
-                bioguide_id = member_vote.get("bioguideID") or member_vote.get("bioguideId")
-                if bioguide_id:
-                    votes_by_member.setdefault(bioguide_id, []).append(
-                        enrich_vote(normalize_house_member_vote(detail_vote, member_vote))
-                    )
+            return {"vote": detail_vote}
+
+        with ThreadPoolExecutor(max_workers=max(1, min(HOUSE_VOTE_WORKERS, len(roll_calls) or 1))) as executor:
+            futures = [executor.submit(fetch_detail, roll_call) for roll_call in roll_calls if roll_call]
+            for future in as_completed(futures):
+                detail = future.result()
+                if detail.get("error"):
+                    return detail
+                detail_vote = detail["vote"]
+                member_votes = result_items(detail_vote.get("results"))
+                enriched_votes = [
+                    (member_vote.get("bioguideID") or member_vote.get("bioguideId"),
+                     enrich_vote(normalize_house_member_vote(detail_vote, member_vote)))
+                    for member_vote in member_votes
+                ]
+                enriched_votes.sort(key=lambda item: item[0] or "")
+                for bioguide_id, vote in enriched_votes:
+                    if bioguide_id:
+                        votes_by_member.setdefault(bioguide_id, []).append(vote)
+
+    for member_votes in votes_by_member.values():
+        member_votes.sort(key=lambda vote: vote.get("date") or "", reverse=True)
 
     return {
         "source": "house-vote",
@@ -638,11 +776,47 @@ def senate_vote_detail_url(congress, session, vote_number):
     )
 
 
-def normalize_senate_member_vote(vote, member_vote):
+SENATE_DOCUMENT_TYPE_MAP = {
+    "s": "s",
+    "s.": "s",
+    "senate bill": "s",
+    "s.j.res.": "sjres",
+    "sjres": "sjres",
+    "senate joint resolution": "sjres",
+    "s.con.res.": "sconres",
+    "s.res.": "sres",
+    "h.r.": "hr",
+    "hr": "hr",
+    "house bill": "hr",
+    "h.j.res.": "hjres",
+    "hjres": "hjres",
+    "house joint resolution": "hjres",
+}
+
+
+def senate_document_bill_title(vote):
+    congress = xml_text(vote, "congress")
+    document_type = (xml_text(vote, "document/document_type") or "").casefold()
+    document_number = xml_text(vote, "document/document_number")
+    bill_type = SENATE_DOCUMENT_TYPE_MAP.get(document_type)
+    if not congress or not bill_type or not document_number:
+        return None
+
+    def fetch_title():
+        data = congress_get(f"bill/{congress}/{bill_type}/{document_number}")
+        if data.get("error"):
+            return None
+        bill = data.get("bill") or {}
+        return bill.get("shortTitle") or bill.get("latestTitle") or bill.get("title")
+
+    return cached(("senate-document-title", congress, bill_type, document_number), fetch_title)
+
+
+def normalize_senate_member_vote(vote, member_vote, enriched_title=None):
     document_type = xml_text(vote, "document/document_type")
     document_number = xml_text(vote, "document/document_number")
     document_name = xml_text(vote, "document/document_name")
-    title = xml_text(vote, "vote_title") or xml_text(vote, "document/document_title")
+    title = enriched_title or xml_text(vote, "vote_title") or xml_text(vote, "document/document_title")
     question = xml_text(vote, "question") or xml_text(vote, "vote_question_text")
     return {
         "bill": {
@@ -689,11 +863,12 @@ def build_senate_vote_index():
                 return detail
 
             vote = detail["xml"]
+            enriched_title = senate_document_bill_title(vote)
             for member_vote in vote.findall("./members/member"):
                 key = senate_vote_member_key(member_vote)
                 if key[0] and key[1]:
                     votes_by_member.setdefault(key, []).append(
-                        enrich_vote(normalize_senate_member_vote(vote, member_vote))
+                        enrich_vote(normalize_senate_member_vote(vote, member_vote, enriched_title))
                     )
 
     return {"source": "senate.gov", "votesByMember": votes_by_member}
