@@ -280,6 +280,7 @@ def normalize_house_member_vote(vote, member_vote):
         "result": vote.get("result"),
         "rollCall": vote.get("rollCallNumber"),
         "session": vote.get("sessionNumber"),
+        "source": "congress.gov",
         "type": vote.get("voteType"),
     }
 
@@ -322,7 +323,6 @@ def build_house_vote_index():
     return {
         "source": "house-vote",
         "votesByMember": votes_by_member,
-        "note": "Congress.gov currently exposes beta House roll call votes only; Senate votes are not available from this API.",
     }
 
 
@@ -366,6 +366,7 @@ def normalize_senate_member_vote(vote, member_vote):
         "result": xml_text(vote, "vote_result_text") or xml_text(vote, "vote_result"),
         "rollCall": xml_text(vote, "vote_number"),
         "session": xml_text(vote, "session"),
+        "source": "senate.gov",
         "type": question,
     }
 
