@@ -1,8 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
 from threading import Lock
-from time import monotonic
-from urllib.parse import urlparse
+from time import monotonic, sleep
+from urllib.parse import quote, urlparse
 import xml.etree.ElementTree as ET
 import json
 import os
@@ -18,6 +18,7 @@ load_dotenv()
 BASE_URL = "https://api.congress.gov/v3"
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "900"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
+GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
 HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "30"))
@@ -35,10 +36,30 @@ SENATE_VOTE_SESSIONS = [
     if session.strip()
 ]
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-2.0-flash,gemini-2.5-flash-lite").split(",")
+    if model.strip()
+]
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/{model}:generateContent"
+GEMINI_ATTEMPTS = int(os.getenv("GEMINI_ATTEMPTS", "2"))
 STANCE_EVIDENCE_LIMIT = int(os.getenv("STANCE_EVIDENCE_LIMIT", "20"))
 
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+STATE_NAMES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
+    "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
+    "HI": "Hawaii", "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+    "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine", "MD": "Maryland",
+    "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire",
+    "NJ": "New Jersey", "NM": "New Mexico", "NY": "New York", "NC": "North Carolina",
+    "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania",
+    "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee",
+    "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+}
+STATE_ABBREVIATIONS = {name: abbr for abbr, name in STATE_NAMES.items()}
 
 app = Flask(__name__)
 CORS(app, origins=CORS_ORIGINS)
@@ -59,7 +80,7 @@ def get_gemini_api_key():
     return os.getenv("GEMINI_API_KEY", "").strip()
 
 
-def cached(cache_key, fetcher, ttl=CACHE_TTL_SECONDS):
+def cached(cache_key, fetcher, ttl=CACHE_TTL_SECONDS, should_cache=None):
     now = monotonic()
     with _cache_lock:
         entry = _cache.get(cache_key)
@@ -67,7 +88,8 @@ def cached(cache_key, fetcher, ttl=CACHE_TTL_SECONDS):
             return entry["value"]
 
     value = fetcher()
-    if not (isinstance(value, dict) and value.get("error")):
+    cacheable = should_cache(value) if should_cache else not (isinstance(value, dict) and value.get("error"))
+    if cacheable:
         with _cache_lock:
             _cache[cache_key] = {"value": value, "expires_at": now + ttl}
     return value
@@ -136,8 +158,6 @@ def gemini_generate_json(prompt):
     if not api_key:
         return None
 
-    model_path = GEMINI_MODEL if GEMINI_MODEL.startswith("models/") else f"models/{GEMINI_MODEL}"
-    url = GEMINI_API_URL.format(model=model_path)
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -145,20 +165,36 @@ def gemini_generate_json(prompt):
             "temperature": 0.2,
         },
     }
-    try:
-        res = _session.post(
-            url,
-            params={"key": api_key},
-            json=payload,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        if res.status_code >= 400:
-            return None
-        data = res.json()
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        return json.loads(text)
-    except (KeyError, IndexError, TypeError, ValueError, requests.exceptions.RequestException):
-        return None
+
+    model_names = [GEMINI_MODEL, *GEMINI_FALLBACK_MODELS]
+    seen_models = set()
+    for model_name in model_names:
+        model_path = model_name if model_name.startswith("models/") else f"models/{model_name}"
+        if model_path in seen_models:
+            continue
+        seen_models.add(model_path)
+        url = GEMINI_API_URL.format(model=model_path)
+        for attempt in range(max(1, GEMINI_ATTEMPTS)):
+            try:
+                res = _session.post(
+                    url,
+                    params={"key": api_key},
+                    json=payload,
+                    timeout=GEMINI_TIMEOUT_SECONDS,
+                )
+                if res.status_code >= 400:
+                    break
+                data = res.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                result = json.loads(text)
+                if isinstance(result, dict):
+                    result["_model"] = model_path.removeprefix("models/")
+                    return result
+                return None
+            except (KeyError, IndexError, TypeError, ValueError, requests.exceptions.RequestException):
+                if attempt < GEMINI_ATTEMPTS - 1:
+                    sleep(0.35)
+    return None
 
 
 def congress_state_members(state_code):
@@ -191,6 +227,55 @@ def member_profile(bioguide_id):
 def geocode_address(address):
     normalized_address = address.strip()
 
+    def parse_census_geographies(geos, state=None):
+        cd_key = next(k for k in geos if "Congressional Districts" in k)
+        congressional_district = geos[cd_key][0]
+        district = congressional_district.get("CD119") or congressional_district.get("BASENAME")
+        if district == "00" or "at large" in str(congressional_district.get("BASENAME", "")).casefold():
+            district = "AL"
+        county_items = next((value for key, value in geos.items() if "Counties" in key), [])
+        county = county_items[0].get("BASENAME") or county_items[0].get("NAME") if county_items else None
+        states = geos.get("States") or []
+        state_code = state or (states[0].get("STUSAB") if states else None)
+        return state_code, district, county
+
+    def census_coordinates_geocode(longitude, latitude):
+        res = _session.get(
+            "https://geocoding.geo.census.gov/geocoder/geographies/coordinates",
+            params={
+                "x": longitude,
+                "y": latitude,
+                "benchmark": "Public_AR_Current",
+                "vintage": "Current_Current",
+                "layers": "all",
+                "format": "json",
+            },
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        res.raise_for_status()
+        geos = res.json()["result"]["geographies"]
+        return parse_census_geographies(geos)
+
+    def arcgis_coordinates():
+        res = _session.get(
+            "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
+            params={
+                "SingleLine": normalized_address,
+                "f": "json",
+                "maxLocations": 1,
+                "countryCode": "USA",
+            },
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        res.raise_for_status()
+        candidates = res.json().get("candidates") or []
+        if not candidates:
+            return None
+        location = candidates[0].get("location") or {}
+        if location.get("x") is None or location.get("y") is None:
+            return None
+        return location["x"], location["y"]
+
     def fetch_geocode():
         res = _session.get(
             "https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress",
@@ -198,7 +283,7 @@ def geocode_address(address):
                 "address": normalized_address,
                 "benchmark": "Public_AR_Current",
                 "vintage": "Current_Current",
-                "layers": "54",
+                "layers": "10,54",
                 "format": "json",
             },
             timeout=REQUEST_TIMEOUT_SECONDS,
@@ -207,12 +292,15 @@ def geocode_address(address):
         try:
             match = res.json()["result"]["addressMatches"][0]
             state = match["addressComponents"]["state"]
-            geos = match["geographies"]
-            cd_key = next(k for k in geos if "Congressional Districts" in k)
-            district = geos[cd_key][0]["BASENAME"]
-            return state, district
+            return parse_census_geographies(match["geographies"], state)
         except (IndexError, KeyError, StopIteration):
-            return None, None
+            try:
+                coordinates = arcgis_coordinates()
+                if not coordinates:
+                    return None, None, None
+                return census_coordinates_geocode(*coordinates)
+            except (requests.exceptions.RequestException, ValueError, KeyError, IndexError, StopIteration, TypeError):
+                return None, None, None
 
     return cached(("geocode", normalized_address.casefold()), fetch_geocode)
 
@@ -466,6 +554,8 @@ def plain_text_summary(value, limit=300):
         return None
     text = re.sub(r"<[^>]+>", " ", str(value))
     text = " ".join(unescape(text).split())
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\s+'", "'", text)
     if not text:
         return None
     return text if len(text) <= limit else f"{text[:limit].rstrip()}..."
@@ -491,13 +581,23 @@ def vote_bill_summary(vote):
     return cached(("bill-summary", congress, bill_type, str(bill_number)), fetch_summary)
 
 
+def safe_vote_bill_summary(vote):
+    try:
+        return vote_bill_summary(vote)
+    except (RuntimeError, KeyError, TypeError, ValueError, requests.exceptions.RequestException):
+        return None
+
+
 def compact_vote_evidence(votes, limit=STANCE_EVIDENCE_LIMIT):
     selected_votes = votes[:limit]
     summaries = {}
     with ThreadPoolExecutor(max_workers=max(1, min(HOUSE_VOTE_WORKERS, len(selected_votes) or 1))) as executor:
-        future_map = {executor.submit(vote_bill_summary, vote): index for index, vote in enumerate(selected_votes)}
+        future_map = {executor.submit(safe_vote_bill_summary, vote): index for index, vote in enumerate(selected_votes)}
         for future in as_completed(future_map):
-            summaries[future_map[future]] = future.result()
+            try:
+                summaries[future_map[future]] = future.result()
+            except (RuntimeError, KeyError, TypeError, ValueError, requests.exceptions.RequestException):
+                summaries[future_map[future]] = None
 
     compact = []
     for index, vote in enumerate(selected_votes):
@@ -538,23 +638,44 @@ def unavailable_ai_summary():
     }
 
 
+def normalize_ai_takeaways(value):
+    if not isinstance(value, list):
+        return []
+    takeaways = []
+    for item in value:
+        if isinstance(item, str):
+            takeaways.append(item)
+        elif isinstance(item, dict):
+            label = str(item.get("label") or "").strip()
+            message = str(item.get("message") or item.get("text") or "").strip()
+            if label and message:
+                takeaways.append(f"{label} {message}")
+            elif message:
+                takeaways.append(message)
+    return takeaways
+
+
 def ai_stance_summary(issues, evidence_votes, scan_count, policy_count):
     if not get_gemini_api_key():
         return unavailable_ai_summary()
 
     prompt = json.dumps({
         "instruction": (
-            "You are a nonpartisan civic explainer writing for a median voter, not a policy expert. "
-            "Translate the voting pattern into plain English about what the member tended to support or oppose. "
+            "You are a nonpartisan civic explainer writing for a busy voter who wants to know what these votes could mean in real life. "
+            "Do not write a generic scorecard. Translate the voting pattern into concrete, everyday tradeoffs. "
             "Avoid congressional jargon such as cloture, motion, roll call, and procedural unless it is essential. "
+            "Avoid vague phrases like 'mixed record', 'regulatory issues', 'suggesting', 'indicating', or 'measures aimed at'. "
             "Prioritize kitchen-table policy signals over repetitive nominations. "
             "When nominations dominate the sample, state that clearly but do not make it the whole summary if other policy votes exist. "
-            "Use the summary field when present to explain what the bill or resolution would do in everyday terms. "
-            "Use the bill titles and results to explain the practical topic of the votes; do not simply restate issue bucket names. "
+            "Use the summary field when present to explain what the bill or resolution would do for households, workers, immigrants, taxpayers, veterans, students, businesses, or service members. "
+            "Use bill titles only as supporting context; do not merely restate titles or issue bucket names. "
+            "For each takeaway, start with a voter-facing label like 'Energy costs:', 'Military action:', 'Immigration:', 'Agency funding:', or 'Education:'. "
+            "Each takeaway must say what the member supported or opposed and why that topic matters to ordinary voters. "
+            "If the evidence is thin, say 'early signal' inside that specific takeaway rather than making the whole answer vague. "
             "Summarize only what the vote evidence supports. "
             "Do not infer ideology, motives, or party loyalty beyond the votes shown. "
-            "Return JSON with headline, takeaways (array of 2-4 short strings), and caveats (array). "
-            "Each takeaway should be specific enough to help a voter decide whether the member aligns with them."
+            "Return JSON with headline, takeaways (array of 3-4 short strings), and caveats (array). "
+            "The headline must be a concrete voter-facing sentence, not a generic label."
         ),
         "issue_counts": issues,
         "scan_context": {
@@ -569,9 +690,9 @@ def ai_stance_summary(issues, evidence_votes, scan_count, policy_count):
 
     return {
         "provider": "gemini",
-        "model": GEMINI_MODEL,
+        "model": result.get("_model") or GEMINI_MODEL,
         "headline": result.get("headline") or "AI summary unavailable.",
-        "takeaways": result.get("takeaways") if isinstance(result.get("takeaways"), list) else [],
+        "takeaways": normalize_ai_takeaways(result.get("takeaways")),
         "caveats": result.get("caveats") if isinstance(result.get("caveats"), list) else [],
     }
 
@@ -882,17 +1003,168 @@ def senate_vote_index():
 
 
 def find_representatives(state, district):
-    district_num = int(district)
+    is_at_large = str(district).upper() == "AL"
+    district_num = 0 if is_at_large else int(district)
     state_members = congress_state_members(state)
     senators = [m for m in state_members if last_chamber(m) == "Senate"][:2]
     representative = next(
         (
             m for m in state_members
-            if last_chamber(m) == "House of Representatives" and m.get("district") == district_num
+            if last_chamber(m) == "House of Representatives"
+            and (m.get("district") in {0, None} if is_at_large else m.get("district") == district_num)
         ),
         None,
     )
     return representative, senators
+
+
+def district_label(state, district):
+    if str(district).upper() == "AL":
+        return f"{state}-AL"
+    try:
+        return f"{state}-{int(district)}"
+    except (TypeError, ValueError):
+        return f"{state}-{district}"
+
+
+def ordinal(value):
+    if str(value).upper() == "AL":
+        return "at-large"
+    number = int(value)
+    if 10 <= number % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+def district_wikipedia_title(state, district):
+    state_name = STATE_NAMES.get(state)
+    if not state_name:
+        return None
+    if str(district).upper() == "AL":
+        return f"{state_name}'s at-large congressional district"
+    return f"{state_name}'s {ordinal(district)} congressional district"
+
+
+def compact_district_extract(extract, limit=260, require_geography=False):
+    if not extract:
+        return None
+
+    current_match = re.search(
+        r"((?:The\s+)?(?:redrawn|current)\s+District\s+\d+\s+includes\s+[^.]+[.])",
+        extract,
+        flags=re.IGNORECASE,
+    )
+    if current_match:
+        return clean_district_sentence(current_match.group(1).strip(), limit)
+
+    sentences = [sentence.strip() for sentence in re.split(r"(?<=[.!?])\s+", extract) if sentence.strip()]
+    geography_terms = (
+        "include", "includes", "encompass", "encompasses", "cover", "covers", "based",
+        "located", "suburb", "county", "counties", "metropolitan", "metro", "parts of",
+    )
+    tautology_terms = ("is a congressional district", "is an electoral district")
+    low_value_terms = (
+        "represented by", "currently represented", "redistricted incumbent",
+        "defeated incumbent", "boundaries were redrawn", "first election", "election using", "death on",
+        "elected to replace", "not running for reelection", "won election", "served until",
+        "civil war", "from 2003", "prior to", "realigned", "eventually became", "until 1992",
+        "shrunk down",
+    )
+    soft_low_value_terms = ("state of",)
+    candidates = []
+    for sentence in sentences:
+        lowered = sentence.casefold()
+        has_geography = any(term in lowered for term in geography_terms)
+        if any(term in lowered for term in tautology_terms) and not has_geography:
+            continue
+        if any(term in lowered for term in low_value_terms):
+            continue
+        if any(term in lowered for term in soft_low_value_terms) and not has_geography:
+            continue
+        candidates.append(sentence)
+    geography_candidates = [
+        sentence for sentence in candidates if any(term in sentence.casefold() for term in geography_terms)
+    ]
+    geography_sentence = geography_candidates[0] if geography_candidates else None
+    if require_geography and not geography_sentence:
+        return None
+    geography_sentence = geography_sentence or (candidates[0] if candidates else None)
+    if not geography_sentence:
+        return None
+
+    return clean_district_sentence(geography_sentence, limit)
+
+
+def clean_district_sentence(sentence, limit=260):
+    compact = re.sub(r"^The\s+", "", sentence, flags=re.IGNORECASE).strip()
+    compact = re.sub(r"^district is currently\s+", "", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"^district is\s+", "", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"^.+?congressional district(?: of .*?)?\s+includes\s+", "Includes ", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"^newly drawn district .*?\bincludes\s+", "Includes ", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"^It includes\s+", "Includes ", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"\s+represented by [^,]+ since the \d{4}s", "", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"\s+represented by [^,]+", "", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    compact = compact[0].upper() + compact[1:] if compact else compact
+    return compact if len(compact) <= limit else f"{compact[:limit].rstrip()}..."
+
+
+def wikipedia_page_district_description(title):
+    url_title = quote(title.replace(" ", "_"))
+    try:
+        res = _session.get(
+            f"https://en.wikipedia.org/wiki/{url_title}",
+            headers={"User-Agent": "howdoesmyrepvote/1.0"},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        if res.status_code >= 400:
+            return None
+        paragraphs = re.findall(r"<p\b[^>]*>(.*?)</p>", res.text, flags=re.IGNORECASE | re.DOTALL)
+        paragraph_text = " ".join(
+            plain_text_summary(paragraph, limit=1200) or ""
+            for paragraph in paragraphs[:10]
+        )
+        return compact_district_extract(paragraph_text, require_geography=True)
+    except (requests.exceptions.RequestException, ValueError, TypeError):
+        return None
+
+
+def wikipedia_district_description(state, district):
+    title = district_wikipedia_title(state, district)
+    if not title:
+        return None
+
+    def fetch_description():
+        url_title = quote(title.replace(" ", "_"))
+        try:
+            res = _session.get(
+                f"https://en.wikipedia.org/api/rest_v1/page/summary/{url_title}",
+                headers={"User-Agent": "howdoesmyrepvote/1.0"},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            if res.status_code >= 400:
+                return None
+            summary_description = compact_district_extract(res.json().get("extract"), require_geography=True)
+            return summary_description or wikipedia_page_district_description(title)
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
+            return None
+
+    return cached(("district-wikipedia-summary", state, str(district)), fetch_description)
+
+
+def district_area_description(state, district, county=None):
+    label = district_label(state, district)
+    if str(district).upper() == "AL":
+        state_name = STATE_NAMES.get(state, state)
+        return f"Covers the entire state of {state_name}."
+    wikipedia_description = wikipedia_district_description(state, district)
+    if wikipedia_description:
+        return wikipedia_description
+    if county:
+        return f"{label} includes the area around this address in {county} County, {state}. District lines can change after redistricting."
+    return f"{label} is the congressional district for this address. District lines can change after redistricting."
 
 
 def get_int_arg(name, default, minimum, maximum):
@@ -920,7 +1192,7 @@ def get_reps():
     if not address:
         return jsonify({"error": "no address provided"}), 400
 
-    state, district = geocode_address(address)
+    state, district, county = geocode_address(address)
     if not state:
         return jsonify({"error": "could not geocode address"}), 400
 
@@ -928,6 +1200,8 @@ def get_reps():
     return jsonify({
         "state": state,
         "district": district,
+        "districtDescription": district_area_description(state, district, county),
+        "districtLabel": district_label(state, district),
         "senators": senators,
         "representative": representative,
     })
@@ -1017,7 +1291,13 @@ def get_member_stance(bioguide_id):
             "source": pool.get("source"),
         }
 
-    data = cached(("stance", bioguide_id, limit), fetch_stance)
+    def should_cache_stance(data):
+        if isinstance(data, dict) and data.get("error"):
+            return False
+        ai_provider = (data.get("profile") or {}).get("aiSummary", {}).get("provider")
+        return ai_provider != "unavailable"
+
+    data = cached(("stance", bioguide_id, limit), fetch_stance, should_cache=should_cache_stance)
     status = data.get("statusCode", 502) if data.get("error") else 200
     return jsonify(data), status
 

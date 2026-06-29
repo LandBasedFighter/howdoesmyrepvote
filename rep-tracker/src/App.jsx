@@ -9,6 +9,13 @@ function getPartyClass(partyName) {
   return "party-independent"
 }
 
+function formatMemberName(name) {
+  if (!name || !name.includes(",")) return name
+  const [last, ...rest] = name.split(",")
+  const givenNames = rest.join(",").trim()
+  return `${givenNames} ${last.trim()}`.replace(/\s+/g, " ").trim()
+}
+
 function formatLatestAction(latestAction) {
   if (!latestAction) return ""
   if (typeof latestAction !== "object") return latestAction
@@ -176,16 +183,17 @@ function MemberCard({ member, chamber }) {
 
   const expandedItems = expandedType === "votes" ? votes : bills
   const partyClass = getPartyClass(member.partyName)
+  const displayName = formatMemberName(member.name)
 
   return (
     <article className={`member-card ${partyClass}`}>
       <div className="member-summary">
         {member.depiction?.imageUrl && (
-          <img className="member-photo" src={member.depiction.imageUrl} alt={member.name} />
+          <img className="member-photo" src={member.depiction.imageUrl} alt={displayName} />
         )}
         <div className="member-details">
           <p className="eyebrow">{chamber}</p>
-          <h3>{member.name}</h3>
+          <h3>{displayName}</h3>
           <span className="party-pill">{member.partyName}</span>
         </div>
       </div>
@@ -391,7 +399,10 @@ function App() {
         <section className="results-section">
           <div className="results-header">
             <p className="eyebrow">Results</p>
-            <h2>{data.state} congressional district {data.district}</h2>
+            <div>
+              <h2>{data.districtLabel ?? `${data.state}-${data.district}`}</h2>
+              {data.districtDescription && <p className="district-description">{data.districtDescription}</p>}
+            </div>
           </div>
 
           <div className="member-grid">

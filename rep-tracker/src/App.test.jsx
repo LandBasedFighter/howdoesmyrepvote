@@ -36,16 +36,18 @@ describe('App', () => {
       json: () => Promise.resolve({
         state: 'NY',
         district: '12',
+        districtDescription: 'NY-12 includes the area around this address in New York County, NY.',
+        districtLabel: 'NY-12',
         representative: {
           bioguideId: 'R000000',
-          name: 'Rep Example',
+          name: 'Johnson, Henry C. "Hank"',
           partyName: 'Democratic',
           terms: { item: [{ chamber: 'House of Representatives' }] },
         },
         senators: [
           {
             bioguideId: 'S000001',
-            name: 'Senator One',
+            name: 'Warnock, Raphael G.',
             partyName: 'Democratic',
             terms: { item: [{ chamber: 'Senate' }] },
           },
@@ -65,9 +67,10 @@ describe('App', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: /search/i }))
 
-    expect(await screen.findByText('Rep Example')).toBeInTheDocument()
-    expect(screen.getByText('Senator One')).toBeInTheDocument()
+    expect(await screen.findByText('Henry C. "Hank" Johnson')).toBeInTheDocument()
+    expect(screen.getByText('Raphael G. Warnock')).toBeInTheDocument()
     expect(screen.getByText('Senator Two')).toBeInTheDocument()
-    expect(screen.getByText('NY congressional district 12')).toBeInTheDocument()
+    expect(screen.getByText('NY-12')).toBeInTheDocument()
+    expect(screen.getByText('NY-12 includes the area around this address in New York County, NY.')).toBeInTheDocument()
   })
 })
