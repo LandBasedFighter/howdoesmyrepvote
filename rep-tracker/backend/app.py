@@ -14,6 +14,12 @@ CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "900"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
+HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "10"))
+HOUSE_VOTE_SESSIONS = [
+    tuple(int(part) for part in session.strip().split(":", 1))
+    for session in os.getenv("HOUSE_VOTE_SESSIONS", "119:2").split(",")
+    if session.strip()
+]
 
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
 
@@ -56,16 +62,16 @@ def congress_get(endpoint_or_url, **params):
     url = endpoint_or_url if endpoint_or_url.startswith("http") else f"{BASE_URL}/{endpoint_or_url}"
     try:
         res = _session.get(url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
-        res.raise_for_status()
-        return res.json()
-    except requests.exceptions.RequestException as error:
-        response = getattr(error, "response", None)
-        status_code = getattr(response, "status_code", None)
-        if status_code:
+        if res.status_code >= 400:
             return {
-                "error": congress_error_message(response) or f"Congress.gov API request failed: {status_code}",
-                "statusCode": status_code,
+                "error": congress_error_message(res) or f"Congress.gov API request failed: {res.status_code}",
+                "statusCode": res.status_code,
             }
+        try:
+            return res.json()
+        except ValueError:
+            return {"error": "Congress.gov API returned a non-JSON response", "statusCode": 502}
+    except requests.exceptions.RequestException as error:
         return {"error": "Congress.gov API request failed", "statusCode": 502}
 
 
@@ -73,6 +79,10 @@ def congress_error_message(response):
     try:
         error_payload = response.json().get("error", {})
     except ValueError:
+        return None
+    if isinstance(error_payload, str):
+        return error_payload
+    if not isinstance(error_payload, dict):
         return None
     code = error_payload.get("code")
     message = error_payload.get("message")
@@ -159,6 +169,102 @@ def normalize_vote(item):
         "session": item.get("session"),
         "type": item.get("type"),
     }
+
+
+def vote_bill_title(vote):
+    legislation_url = vote.get("legislationUrl")
+    if not legislation_url:
+        return vote.get("title") or vote.get("amendmentAuthor")
+
+    def fetch_title():
+        data = congress_get(legislation_url)
+        if data.get("error"):
+            return None
+        bill = data.get("bill") or {}
+        amendment = data.get("amendment") or {}
+        amended_bill = amendment.get("amendedBill") or {}
+        return (
+            bill.get("shortTitle")
+            or bill.get("latestTitle")
+            or bill.get("title")
+            or amendment.get("purpose")
+            or amended_bill.get("title")
+        )
+
+    return cached(("vote-bill-title", legislation_url), fetch_title)
+
+
+def normalize_house_member_vote(vote, member_vote):
+    legislation_type = vote.get("legislationType") or vote.get("amendmentType")
+    legislation_number = vote.get("legislationNumber") or vote.get("amendmentNumber")
+    title = vote.get("enrichedTitle") or vote.get("title") or vote.get("amendmentAuthor")
+    question = vote.get("voteQuestion")
+    return {
+        "bill": {
+            "number": legislation_number,
+            "title": title,
+            "type": legislation_type,
+        },
+        "chamber": "House",
+        "congress": vote.get("congress"),
+        "date": vote.get("startDate"),
+        "description": title or question,
+        "question": question,
+        "position": member_vote.get("voteCast"),
+        "result": vote.get("result"),
+        "rollCall": vote.get("rollCallNumber"),
+        "session": vote.get("sessionNumber"),
+        "type": vote.get("voteType"),
+    }
+
+
+def result_items(results):
+    if isinstance(results, dict):
+        items = results.get("item", [])
+    else:
+        items = results or []
+    return items if isinstance(items, list) else [items]
+
+
+def build_house_vote_index():
+    votes_by_member = {}
+    for congress, session in HOUSE_VOTE_SESSIONS:
+        vote_list = congress_get(
+            f"house-vote/{congress}/{session}",
+            limit=HOUSE_VOTE_SCAN_LIMIT,
+            sort="updateDate+desc",
+        )
+        if vote_list.get("error"):
+            return vote_list
+
+        for vote in vote_list.get("houseRollCallVotes", []):
+            detail = congress_get(
+                f"house-vote/{congress}/{session}/{vote.get('rollCallNumber')}/members"
+            )
+            if detail.get("error"):
+                return detail
+
+            detail_vote = detail.get("houseRollCallVoteMemberVotes", {})
+            detail_vote["enrichedTitle"] = vote_bill_title(detail_vote)
+            for member_vote in result_items(detail_vote.get("results")):
+                bioguide_id = member_vote.get("bioguideID") or member_vote.get("bioguideId")
+                if bioguide_id:
+                    votes_by_member.setdefault(bioguide_id, []).append(
+                        normalize_house_member_vote(detail_vote, member_vote)
+                    )
+
+    return {
+        "source": "house-vote",
+        "votesByMember": votes_by_member,
+        "note": "Congress.gov currently exposes beta House roll call votes only; Senate votes are not available from this API.",
+    }
+
+
+def house_vote_index():
+    return cached(
+        ("house-vote-index", tuple(HOUSE_VOTE_SESSIONS), HOUSE_VOTE_SCAN_LIMIT),
+        build_house_vote_index,
+    )
 
 
 def find_representatives(state, district):
@@ -249,10 +355,14 @@ def get_member_votes(bioguide_id):
     limit = get_int_arg("limit", MAX_VOTES, 1, 25)
 
     def fetch_votes():
-        data = congress_get(f"member/{bioguide_id}/votes", limit=limit)
-        if data.get("error"):
-            return data
-        return {"votes": [normalize_vote(vote) for vote in data.get("votes", [])[:limit]]}
+        index = house_vote_index()
+        if index.get("error"):
+            return index
+        return {
+            "votes": index.get("votesByMember", {}).get(bioguide_id, [])[:limit],
+            "source": index.get("source"),
+            "note": index.get("note"),
+        }
 
     data = cached(("votes", bioguide_id, limit), fetch_votes)
     status = data.get("statusCode", 502) if data.get("error") else 200
