@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 const ITEMS_PER_PAGE = 5
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5000"
@@ -95,9 +95,15 @@ function parseDistrictSearch(value) {
     .sort((a, b) => b.length - a.length)
     .find(name => normalized.toLowerCase().includes(name))
   if (stateName) {
+    const escapedState = stateName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    const districtValue = "(\\d+(?:st|nd|rd|th)?|al|at-large|at large)"
+    const stateFirst = new RegExp(`^${escapedState}\\s+(?:district\\s+)?${districtValue}$`, "i")
+    const districtFirst = new RegExp(`^${districtValue}(?:\\s+congressional)?\\s+district\\s+${escapedState}$`, "i")
+    const match = normalized.match(stateFirst) || normalized.match(districtFirst)
+    if (!match) return null
     return {
       state: STATE_ABBREVIATIONS[stateName],
-      district: normalizeDistrictNumber(normalized),
+      district: normalizeDistrictNumber(match[1]),
     }
   }
 
@@ -114,6 +120,28 @@ function districtSuggestions(value) {
       || `${option.state}${option.district}`.toLowerCase().includes(normalized.replace(/[^a-z0-9]/g, ""))
     ))
     .slice(0, 8)
+}
+
+function representativeSuggestions(value, options) {
+  const normalized = value.trim().toLowerCase()
+  if (normalized.length < 2) return []
+  const terms = normalized.split(/\s+/).filter(Boolean)
+  return options
+    .filter(option => {
+      const searchText = `${option.label} ${option.display} ${option.search ?? ""}`.toLowerCase()
+      return terms.every(term => searchText.includes(term))
+    })
+    .slice(0, 8)
+}
+
+function looksLikeAddress(value) {
+  const normalized = value.trim()
+  if (!/\d/.test(normalized) || /^[0-9-]+$/.test(normalized)) return false
+  return (
+    /\b(aly|alley|ave|avenue|blvd|boulevard|cir|circle|ct|court|dr|drive|hwy|highway|ln|lane|loop|pkwy|parkway|pl|place|rd|road|sq|square|st|street|ter|terrace|trl|trail|way)\b/i.test(normalized)
+    || /,\s*[A-Z]{2}\b/.test(normalized)
+    || Object.values(STATE_NAMES).some(stateName => normalized.toLowerCase().includes(stateName.toLowerCase()))
+  )
 }
 
 function getPartyClass(partyName) {
@@ -253,7 +281,7 @@ function ResultsSkeleton() {
   )
 }
 
-function MemberCard({ member, chamber }) {
+function MemberCard({ member }) {
   const [bills, setBills] = useState([])
   const [votes, setVotes] = useState([])
   const [profile, setProfile] = useState(null)
@@ -307,7 +335,6 @@ function MemberCard({ member, chamber }) {
           <img className="member-photo" src={member.depiction.imageUrl} alt={displayName} />
         )}
         <div className="member-details">
-          <p className="eyebrow">{chamber}</p>
           <h3>{displayName}</h3>
           <span className="party-pill">{member.partyName}</span>
         </div>
@@ -450,35 +477,82 @@ function App() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [representativeOptions, setRepresentativeOptions] = useState([])
+  const lookupSectionRef = useRef(null)
   const mode = SEARCH_MODES[searchMode]
-  const suggestions = searchMode === "district" ? districtSuggestions(searchText) : []
+  const districtMatches = searchMode === "district" ? districtSuggestions(searchText) : []
+  const representativeMatches = searchMode === "representative" ? representativeSuggestions(searchText, representativeOptions) : []
 
-  async function fetchReps() {
-    const trimmedSearch = searchText.trim()
+  useEffect(() => {
+    if (searchMode !== "representative" || representativeOptions.length > 0) return
+
+    let cancelled = false
+    async function loadRepresentatives() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/representatives`)
+        const json = await res.json()
+        if (!cancelled) {
+          setRepresentativeOptions(json.representatives || [])
+        }
+      } catch {
+        if (!cancelled) setRepresentativeOptions([])
+      }
+    }
+    loadRepresentatives()
+
+    return () => {
+      cancelled = true
+    }
+  }, [representativeOptions.length, searchMode])
+
+  useEffect(() => {
+    if (!loading && !data) return
+    if (typeof lookupSectionRef.current?.scrollIntoView === "function") {
+      lookupSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" })
+    }
+  }, [data, loading])
+
+  async function fetchReps(searchOverride = searchText, modeOverride = searchMode) {
+    const trimmedSearch = searchOverride.trim()
     if (!trimmedSearch) {
       setError('Try a full address like "350 5th Ave New York, NY" or a district like "NY-12."')
       return
     }
-    if (searchMode === "address" && /^\d{5}(?:-\d{4})?$/.test(trimmedSearch)) {
+    if (modeOverride === "address" && /^\d{5}(?:-\d{4})?$/.test(trimmedSearch)) {
       setError(`ZIP ${trimmedSearch.slice(0, 5)} may overlap multiple districts. Try a full address or switch to district search.`)
+      return
+    }
+    if (modeOverride === "address" && parseDistrictSearch(trimmedSearch)) {
+      setError("That looks like a congressional district. Switch to District search to look it up directly.")
+      return
+    }
+    if (modeOverride === "address" && !looksLikeAddress(trimmedSearch)) {
+      setError('Enter a complete street address, like "350 5th Ave New York, NY 10001", or switch to District or Representative search.')
       return
     }
     setLoading(true)
     setError("")
     setData(null)
     try {
-      let url = `${API_BASE_URL}/reps?address=${encodeURIComponent(trimmedSearch)}`
-      if (searchMode === "district") {
+      let url = `${API_BASE_URL}/reps`
+      let options = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: trimmedSearch }),
+      }
+      if (modeOverride === "district") {
         const districtMatch = parseDistrictSearch(trimmedSearch)
         if (!districtMatch?.state || !districtMatch?.district) {
           setError('Try a district like "NY-12", "New York 12", or "Vermont at-large."')
           return
         }
         url = `${API_BASE_URL}/reps?state=${encodeURIComponent(districtMatch.state)}&district=${encodeURIComponent(districtMatch.district)}`
-      } else if (searchMode === "representative") {
+        options = undefined
+      } else if (modeOverride === "representative") {
         url = `${API_BASE_URL}/reps?representative=${encodeURIComponent(trimmedSearch)}`
+        options = undefined
       }
-      const res = await fetch(url)
+      const res = options ? await fetch(url, options) : await fetch(url)
       const json = await res.json()
       if (json.error) {
         setError(json.error)
@@ -492,11 +566,19 @@ function App() {
     }
   }
 
+  function updateSearchText(value) {
+    setSearchText(value)
+    if (searchMode !== "representative" || loading) return
+    const selectedRepresentative = representativeOptions.find(option => option.label === value)
+    if (selectedRepresentative) {
+      fetchReps(value, "representative")
+    }
+  }
+
   return (
     <main className="app-shell">
       <section className="hero">
         <div>
-          <p className="eyebrow">Congressional lookup</p>
           <h1>Find your representatives and how they vote.</h1>
           <p className="hero-copy">
             Enter a street address or congressional district to find your House member, senators, recent votes, and sponsored legislation.
@@ -504,7 +586,7 @@ function App() {
         </div>
 
         <div className="search-card">
-          <div className="search-mode-tabs" role="tablist" aria-label="Search type">
+          <div className="search-mode-tabs" role="tablist" aria-label="Search type" data-active={searchMode}>
             {Object.entries(SEARCH_MODES).map(([key, config]) => (
               <button
                 key={key}
@@ -530,19 +612,26 @@ function App() {
               type="text"
               placeholder={mode.placeholder}
               value={searchText}
-              onChange={e => setSearchText(e.target.value)}
+              onChange={e => updateSearchText(e.target.value)}
               onKeyDown={e => e.key === "Enter" && fetchReps()}
               disabled={loading}
-              list={searchMode === "district" ? "district-options" : undefined}
+              list={searchMode === "district" ? "district-options" : searchMode === "representative" ? "representative-options" : undefined}
             />
             {searchMode === "district" && (
               <datalist id="district-options">
-                {suggestions.map(option => (
+                {districtMatches.map(option => (
                   <option key={option.label} value={option.label}>{option.display}</option>
                 ))}
               </datalist>
             )}
-            <button className="primary-button" onClick={fetchReps} disabled={loading}>
+            {searchMode === "representative" && (
+              <datalist id="representative-options">
+                {representativeMatches.map(option => (
+                  <option key={option.bioguideId || option.label} value={option.label}>{option.display}</option>
+                ))}
+              </datalist>
+            )}
+            <button className="primary-button" onClick={() => fetchReps()} disabled={loading}>
               <LoadingButtonContent loading={loading} loadingText="Searching">
                 Search
               </LoadingButtonContent>
@@ -552,33 +641,35 @@ function App() {
         </div>
       </section>
 
-      {error && <p className="status-message error">{error}</p>}
-      {loading && <ResultsSkeleton />}
+      <div ref={lookupSectionRef} className="lookup-section-anchor">
+        {error && <p className="status-message error">{error}</p>}
+        {loading && <ResultsSkeleton />}
 
-      {data && (
-        <section className="results-section">
-          <div className="results-header">
-            <div className="district-summary">
-              <h2>{data.districtLabel ?? `${data.state}-${data.district}`}</h2>
-              {data.districtDescription && <p className="district-description">{data.districtDescription}</p>}
-            </div>
-          </div>
-
-          <div className="member-grid">
-            <div className="result-group">
-              <h2>Your Representative</h2>
-              {data.representative
-                ? <MemberCard member={data.representative} chamber="House of Representatives" />
-                : <p className="empty-state">No representative found.</p>}
+        {data && (
+          <section className="results-section">
+            <div className="results-header">
+              <div className="district-summary">
+                <h2>{data.districtLabel ?? `${data.state}-${data.district}`}</h2>
+                {data.districtDescription && <p className="district-description">{data.districtDescription}</p>}
+              </div>
             </div>
 
-            <div className="result-group">
-              <h2>Your Senators</h2>
-              {data.senators.map(s => <MemberCard key={s.bioguideId} member={s} chamber="Senate" />)}
+            <div className="member-grid">
+              <div className="result-group">
+                <h2>Your Representative</h2>
+                {data.representative
+                  ? <MemberCard member={data.representative} />
+                  : <p className="empty-state">No representative found.</p>}
+              </div>
+
+              <div className="result-group">
+                <h2>Your Senators</h2>
+                {data.senators.map(s => <MemberCard key={s.bioguideId} member={s} />)}
+              </div>
             </div>
-          </div>
-        </section>
-      )}
+          </section>
+        )}
+      </div>
     </main>
   )
 }
