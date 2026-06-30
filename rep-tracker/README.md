@@ -121,6 +121,16 @@ Use these settings:
 
 After the backend is hosted, set the GitHub repository secret `PAGES_API_BASE_URL` to the backend origin, such as the host-provided HTTPS URL. Push to `master` or run the `Deploy GitHub Pages` workflow manually to rebuild the frontend against that API.
 
+## Resume story
+
+This project demonstrates a production-ready full-stack civic data app:
+
+- React/Vite frontend deployed to GitHub Pages at `https://howdoesmyrepvote.us`.
+- Separately hosted Flask API with production CORS and server-side civic API keys.
+- Privacy-aware address lookup using `POST /reps`.
+- Congress.gov, Census geocoding, Senate.gov roll-call XML, and optional Gemini policy explanations.
+- Automated frontend lint/tests/build, backend pytest, GitHub Pages deploy, and production API health smoke check.
+
 ## Checks
 
 Frontend checks from `rep-tracker`:
