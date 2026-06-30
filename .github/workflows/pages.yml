@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   checks:
@@ -45,6 +45,14 @@ jobs:
       - name: Build frontend with local API default
         working-directory: rep-tracker
         run: npm run build
+
+      - name: Install Playwright browsers
+        working-directory: rep-tracker
+        run: npx playwright install chromium --with-deps
+
+      - name: Run e2e tests
+        working-directory: rep-tracker
+        run: npx playwright test
 
       - name: Set up Python
         uses: actions/setup-python@v5
