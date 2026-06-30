@@ -1039,10 +1039,103 @@ def normalized_district(value):
     return str(int(digits.group(0)))
 
 
+def parse_district_search(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    compact_match = re.fullmatch(r"([A-Za-z]{2})\s*-?\s*(\d+|AL|at-large|at large)", text, flags=re.IGNORECASE)
+    if compact_match:
+        return compact_match.group(1).upper(), normalized_district(compact_match.group(2))
+
+    lowered = re.sub(r"[.,]", " ", text.casefold())
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    for state_name, state_code in sorted(STATE_ABBREVIATIONS.items(), key=lambda item: len(item[0]), reverse=True):
+        escaped_state = re.escape(state_name.casefold())
+        district_value = r"(\d+(?:st|nd|rd|th)?|al|at-large|at large)"
+        match = (
+            re.fullmatch(rf"{escaped_state}\s+(?:district\s+)?{district_value}", lowered)
+            or re.fullmatch(rf"{district_value}(?:\s+congressional)?\s+district\s+{escaped_state}", lowered)
+        )
+        if match:
+            district = normalized_district(match.group(1))
+            return (state_code, district) if district else None
+    return None
+
+
+def looks_like_street_address(value):
+    text = str(value or "").strip()
+    if not text or not re.search(r"\d", text) or re.fullmatch(r"[0-9-]+", text):
+        return False
+    if parse_district_search(text):
+        return False
+    street_suffix = (
+        r"\b(?:aly|alley|ave|avenue|blvd|boulevard|cir|circle|ct|court|dr|drive|hwy|highway|"
+        r"ln|lane|loop|pkwy|parkway|pl|place|rd|road|sq|square|st|street|ter|terrace|trl|trail|way)\b"
+    )
+    return bool(
+        re.search(street_suffix, text, flags=re.IGNORECASE)
+        or re.search(r",\s*[A-Z]{2}\b", text)
+        or any(state.casefold() in text.casefold() for state in STATE_ABBREVIATIONS)
+    )
+
+
 def member_name_text(member):
     return " ".join(
-        str(member.get(key) or "")
+        value
         for key in ("name", "directOrderName", "firstName", "lastName", "honorificName")
+        if (value := str(member.get(key) or "").strip())
+    )
+
+
+def display_member_name(member):
+    direct_name = str(member.get("directOrderName") or "").strip()
+    if direct_name:
+        return direct_name
+    name = str(member.get("name") or "").strip()
+    if "," not in name:
+        return name
+    last, given = name.split(",", 1)
+    return " ".join(f"{given.strip()} {last.strip()}".split())
+
+
+def name_terms(value):
+    return [term for term in re.findall(r"[a-z0-9]+", str(value or "").casefold()) if len(term) > 1]
+
+
+def edit_distance_within(left, right, limit):
+    if abs(len(left) - len(right)) > limit:
+        return False
+
+    previous = list(range(len(right) + 1))
+    for i, left_char in enumerate(left, 1):
+        current = [i]
+        row_min = i
+        for j, right_char in enumerate(right, 1):
+            cost = 0 if left_char == right_char else 1
+            current.append(min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + cost,
+            ))
+            row_min = min(row_min, current[-1])
+        if row_min > limit:
+            return False
+        previous = current
+    return previous[-1] <= limit
+
+
+def similar_name_term(query_term, member_term):
+    if query_term in member_term or member_term in query_term:
+        return True
+    limit = 1 if max(len(query_term), len(member_term)) < 7 else 2
+    return edit_distance_within(query_term, member_term, limit)
+
+
+def fuzzy_name_match(query_terms, member_terms):
+    return bool(query_terms) and all(
+        any(similar_name_term(query_term, member_term) for member_term in member_terms)
+        for query_term in query_terms
     )
 
 
@@ -1050,7 +1143,7 @@ def find_house_member_by_name(query):
     normalized_query = normalize_name_key(query)
     if len(normalized_query) < 2:
         return None
-    query_terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 1]
+    query_terms = name_terms(query)
 
     def fetch_match():
         partial_match = None
@@ -1062,14 +1155,43 @@ def find_house_member_by_name(query):
                 normalized_name = normalize_name_key(name_text)
                 if normalized_name == normalized_query:
                     return member
+                member_terms = name_terms(name_text)
                 if (
                     partial_match is None
-                    and (normalized_query in normalized_name or all(term in name_text.casefold() for term in query_terms))
+                    and (
+                        normalized_query in normalized_name
+                        or all(term in name_text.casefold() for term in query_terms)
+                        or fuzzy_name_match(query_terms, member_terms)
+                    )
                 ):
                     partial_match = member
         return partial_match
 
     return cached(("house-member-name", normalized_query), fetch_match)
+
+
+def current_house_member_options():
+    def fetch_options():
+        options = []
+        for state in STATE_NAMES:
+            for member in congress_state_members(state):
+                if last_chamber(member) != "House of Representatives":
+                    continue
+                district = normalized_district(member.get("district"))
+                state_code = member_state_code(member) or state
+                label = display_member_name(member)
+                if not label or not district:
+                    continue
+                options.append({
+                    "bioguideId": member.get("bioguideId"),
+                    "districtLabel": district_label(state_code, district),
+                    "display": f"{label} ({district_label(state_code, district)})",
+                    "label": label,
+                    "search": member_name_text(member),
+                })
+        return sorted(options, key=lambda option: option["label"])
+
+    return cached(("current-house-member-options",), fetch_options)
 
 
 def build_reps_response(state, district, county=None):
@@ -1243,12 +1365,18 @@ def health():
     return jsonify({"status": "ok"})
 
 
-@app.route("/reps")
+@app.route("/representatives")
+def get_representatives():
+    return jsonify({"representatives": current_house_member_options()})
+
+
+@app.route("/reps", methods=["GET", "POST"])
 def get_reps():
-    address = request.args.get("address", "").strip()
-    state_arg = request.args.get("state", "").strip().upper()
-    district_arg = request.args.get("district", "").strip()
-    representative_arg = request.args.get("representative", "").strip()
+    payload = (request.get_json(silent=True) or {}) if request.method == "POST" else {}
+    address = str(payload.get("address") or request.args.get("address", "")).strip()
+    state_arg = str(payload.get("state") or request.args.get("state", "")).strip().upper()
+    district_arg = str(payload.get("district") or request.args.get("district", "")).strip()
+    representative_arg = str(payload.get("representative") or request.args.get("representative", "")).strip()
 
     if state_arg or district_arg:
         district = normalized_district(district_arg)
@@ -1259,7 +1387,7 @@ def get_reps():
     if representative_arg:
         member = find_house_member_by_name(representative_arg)
         if not member:
-            return jsonify({"error": "could not find a current House representative by that name"}), 404
+            return jsonify({"error": "Could not find a current House representative by that name."}), 404
         state = member_state_code(member)
         district = normalized_district(member.get("district"))
         if not state or not district:
@@ -1268,6 +1396,10 @@ def get_reps():
 
     if not address:
         return jsonify({"error": "provide an address or district"}), 400
+    if parse_district_search(address):
+        return jsonify({"error": "that looks like a congressional district; use district search instead"}), 400
+    if not looks_like_street_address(address):
+        return jsonify({"error": "enter a complete street address, or use district or representative search"}), 400
 
     state, district, county = geocode_address(address)
     if not state:

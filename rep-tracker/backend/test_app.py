@@ -91,7 +91,7 @@ def test_reps_endpoint_returns_geocoded_members(monkeypatch):
     ))
 
     client = backend.app.test_client()
-    response = client.get("/reps?address=350%205th%20Ave")
+    response = client.post("/reps", json={"address": "350 5th Ave New York, NY 10001"})
 
     assert response.status_code == 200
     assert response.get_json() == {
@@ -101,6 +101,36 @@ def test_reps_endpoint_returns_geocoded_members(monkeypatch):
         "representative": {"name": "Rep Example"},
         "senators": [{"name": "Senator Example"}],
         "state": "NY",
+    }
+
+
+def test_reps_endpoint_rejects_district_text_as_address(monkeypatch):
+    def fail_geocode(address):
+        raise AssertionError("district-looking input should not be geocoded as an address")
+
+    monkeypatch.setattr(backend, "geocode_address", fail_geocode)
+
+    client = backend.app.test_client()
+    response = client.post("/reps", json={"address": "GA-4"})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "that looks like a congressional district; use district search instead",
+    }
+
+
+def test_reps_endpoint_rejects_non_address_text(monkeypatch):
+    def fail_geocode(address):
+        raise AssertionError("non-address input should not be geocoded")
+
+    monkeypatch.setattr(backend, "geocode_address", fail_geocode)
+
+    client = backend.app.test_client()
+    response = client.post("/reps", json={"address": "not an address"})
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "enter a complete street address, or use district or representative search",
     }
 
 
@@ -160,6 +190,73 @@ def test_reps_endpoint_returns_representative_name_match(monkeypatch):
         },
         "senators": [{"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "NY"}]}}],
         "state": "NY",
+    }
+
+
+def test_reps_endpoint_handles_misspelled_representative_name(monkeypatch):
+    def state_members(state):
+        if state != "NY":
+            return []
+        return [
+            {
+                "name": "Ocasio-Cortez, Alexandria",
+                "district": 14,
+                "terms": {"item": [{"chamber": "House of Representatives", "stateCode": "NY"}]},
+            },
+            {"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "NY"}]}},
+        ]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers parts of New York City.")
+
+    client = backend.app.test_client()
+    response = client.get("/reps?representative=Alexandria%20Ocascio")
+
+    assert response.status_code == 200
+    assert response.get_json()["districtLabel"] == "NY-14"
+    assert response.get_json()["representative"]["name"] == "Ocasio-Cortez, Alexandria"
+
+
+def test_representatives_endpoint_returns_autocomplete_options(monkeypatch):
+    def state_members(state):
+        if state != "NY":
+            return []
+        return [
+            {
+                "bioguideId": "O000172",
+                "name": "Ocasio-Cortez, Alexandria",
+                "district": 14,
+                "terms": {"item": [{"chamber": "House of Representatives", "stateCode": "NY"}]},
+            },
+            {"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "NY"}]}},
+        ]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+
+    client = backend.app.test_client()
+    response = client.get("/representatives")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "representatives": [{
+            "bioguideId": "O000172",
+            "display": "Alexandria Ocasio-Cortez (NY-14)",
+            "districtLabel": "NY-14",
+            "label": "Alexandria Ocasio-Cortez",
+            "search": "Ocasio-Cortez, Alexandria",
+        }],
+    }
+
+
+def test_reps_endpoint_capitalizes_representative_not_found(monkeypatch):
+    monkeypatch.setattr(backend, "congress_state_members", lambda state: [])
+
+    client = backend.app.test_client()
+    response = client.get("/reps?representative=Nope")
+
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "error": "Could not find a current House representative by that name.",
     }
 
 
