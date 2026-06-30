@@ -49,7 +49,7 @@ Backend variables in `rep-tracker\backend\.env`:
 ```env
 CONGRESS_CIVIC_API_KEY=your_api_key_here
 CACHE_TTL_SECONDS=900
-CORS_ORIGINS=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 REQUEST_TIMEOUT_SECONDS=10
 GEMINI_TIMEOUT_SECONDS=30
 HOUSE_VOTE_SCAN_LIMIT=30
@@ -64,7 +64,7 @@ GEMINI_ATTEMPTS=2
 STANCE_EVIDENCE_LIMIT=20
 ```
 
-For deployment, set `VITE_API_BASE_URL` to the hosted Flask API URL and set `CORS_ORIGINS` to the hosted frontend origin. Use comma-separated origins when more than one frontend host needs access.
+For deployment, set `VITE_API_BASE_URL` to the hosted Flask API URL and set `CORS_ORIGINS` to the hosted frontend origin. Use comma-separated origins when more than one frontend host needs access. Localhost origins automatically also allow the matching `127.0.0.1` origin for the same port.
 
 House votes are loaded from Congress.gov roll-call data, and Senate votes are loaded from Senate.gov roll-call XML. The backend builds cached vote indexes, then reuses them for fast member lookups. `HOUSE_VOTE_SCAN_LIMIT` and `SENATE_VOTE_SCAN_LIMIT` control how many recent roll calls are scanned per chamber/session; `HOUSE_VOTE_WORKERS` controls concurrent House roll-call detail fetches; `STANCE_EVIDENCE_LIMIT` controls how many substantive policy votes are sent to Gemini for reasoning.
 

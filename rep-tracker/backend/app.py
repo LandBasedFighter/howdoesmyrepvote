@@ -45,7 +45,34 @@ GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/{model}:gener
 GEMINI_ATTEMPTS = int(os.getenv("GEMINI_ATTEMPTS", "2"))
 STANCE_EVIDENCE_LIMIT = int(os.getenv("STANCE_EVIDENCE_LIMIT", "20"))
 
-CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "*").split(",") if origin.strip()]
+LOCALHOST_CORS_ALIASES = {"localhost", "127.0.0.1"}
+
+
+def parse_cors_origins(value):
+    origins = []
+    for raw_origin in str(value or "").split(","):
+        origin = raw_origin.strip().rstrip("/")
+        if not origin:
+            continue
+        if origin == "*":
+            return ["*"]
+
+        parsed = urlparse(origin)
+        if parsed.scheme and parsed.netloc:
+            origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+            if parsed.hostname in LOCALHOST_CORS_ALIASES:
+                port = f":{parsed.port}" if parsed.port else ""
+                origins.extend([
+                    f"{parsed.scheme.lower()}://localhost{port}",
+                    f"{parsed.scheme.lower()}://127.0.0.1{port}",
+                ])
+                continue
+
+        origins.append(origin)
+    return list(dict.fromkeys(origins)) or ["*"]
+
+
+CORS_ORIGINS = parse_cors_origins(os.getenv("CORS_ORIGINS", "*"))
 STATE_NAMES = {
     "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California",
     "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware", "FL": "Florida", "GA": "Georgia",
@@ -60,6 +87,14 @@ STATE_NAMES = {
     "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
 }
 STATE_ABBREVIATIONS = {name: abbr for abbr, name in STATE_NAMES.items()}
+HOUSE_DISTRICT_COUNTS = {
+    "AL": 7, "AK": 1, "AZ": 9, "AR": 4, "CA": 52, "CO": 8, "CT": 5, "DE": 1, "FL": 28, "GA": 14,
+    "HI": 2, "ID": 2, "IL": 17, "IN": 9, "IA": 4, "KS": 4, "KY": 6, "LA": 6, "ME": 2, "MD": 8,
+    "MA": 9, "MI": 13, "MN": 8, "MS": 4, "MO": 8, "MT": 2, "NE": 3, "NV": 4, "NH": 2, "NJ": 12,
+    "NM": 3, "NY": 26, "NC": 14, "ND": 1, "OH": 15, "OK": 5, "OR": 6, "PA": 17, "RI": 2, "SC": 7,
+    "SD": 1, "TN": 9, "TX": 38, "UT": 4, "VT": 1, "VA": 11, "WA": 10, "WV": 2, "WI": 8, "WY": 1,
+}
+AT_LARGE_STATES = {"AK", "DE", "ND", "SD", "VT", "WY"}
 
 app = Flask(__name__)
 CORS(app, origins=CORS_ORIGINS)
@@ -1039,6 +1074,18 @@ def normalized_district(value):
     return str(int(digits.group(0)))
 
 
+def valid_house_district(state, district):
+    if state not in HOUSE_DISTRICT_COUNTS or not district:
+        return False
+    if str(district).upper() == "AL":
+        return state in AT_LARGE_STATES
+    try:
+        district_number = int(district)
+    except (TypeError, ValueError):
+        return False
+    return 1 <= district_number <= HOUSE_DISTRICT_COUNTS[state]
+
+
 def parse_district_search(value):
     text = str(value or "").strip()
     if not text:
@@ -1194,6 +1241,21 @@ def current_house_member_options():
     return cached(("current-house-member-options",), fetch_options)
 
 
+def enrich_member_card(member):
+    if not member:
+        return member
+    if member.get("depiction", {}).get("imageUrl"):
+        return member
+    bioguide_id = member.get("bioguideId")
+    if not bioguide_id:
+        return member
+    profile = member_profile(bioguide_id)
+    if profile.get("error"):
+        return member
+    depiction = profile.get("depiction")
+    return {**member, "depiction": depiction} if depiction else member
+
+
 def build_reps_response(state, district, county=None):
     representative, senators = find_representatives(state, district)
     return {
@@ -1201,8 +1263,8 @@ def build_reps_response(state, district, county=None):
         "district": district,
         "districtDescription": district_area_description(state, district, county),
         "districtLabel": district_label(state, district),
-        "senators": senators,
-        "representative": representative,
+        "senators": [enrich_member_card(senator) for senator in senators],
+        "representative": enrich_member_card(representative),
     }
 
 
@@ -1382,6 +1444,8 @@ def get_reps():
         district = normalized_district(district_arg)
         if state_arg not in STATE_NAMES or not district:
             return jsonify({"error": "provide a valid state and district"}), 400
+        if not valid_house_district(state_arg, district):
+            return jsonify({"error": f"No current House representative found for {district_label(state_arg, district)}."}), 404
         return jsonify(build_reps_response(state_arg, district))
 
     if representative_arg:

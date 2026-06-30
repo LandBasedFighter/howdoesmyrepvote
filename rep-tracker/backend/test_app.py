@@ -43,6 +43,18 @@ def test_cached_honors_custom_cache_predicate():
     assert calls["count"] == 2
 
 
+def test_parse_cors_origins_normalizes_and_expands_loopback_aliases():
+    assert backend.parse_cors_origins("http://localhost:5173, https://example.test/") == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://example.test",
+    ]
+
+
+def test_parse_cors_origins_keeps_wildcard():
+    assert backend.parse_cors_origins("*") == ["*"]
+
+
 def test_find_representatives_matches_current_chamber_and_district(monkeypatch):
     monkeypatch.setattr(backend, "congress_state_members", lambda state: [
         {
@@ -157,6 +169,41 @@ def test_reps_endpoint_returns_district_members_without_geocoding(monkeypatch):
         "senators": [{"name": "Senator Example"}],
         "state": "NY",
     }
+
+
+def test_reps_endpoint_rejects_out_of_range_district_without_lookup(monkeypatch):
+    def fail_find_representatives(state, district):
+        raise AssertionError("invalid districts should not be looked up")
+
+    monkeypatch.setattr(backend, "find_representatives", fail_find_representatives)
+
+    client = backend.app.test_client()
+    response = client.get("/reps?state=CA&district=99")
+
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "error": "No current House representative found for CA-99.",
+    }
+
+
+def test_reps_endpoint_enriches_member_card_images(monkeypatch):
+    monkeypatch.setattr(backend, "geocode_address", lambda address: ("NY", "14", "Queens"))
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers parts of New York City.")
+    monkeypatch.setattr(backend, "find_representatives", lambda state, district: (
+        {"bioguideId": "O000172", "name": "Ocasio-Cortez, Alexandria"},
+        [{"bioguideId": "S000001", "name": "Schumer, Charles E."}],
+    ))
+    monkeypatch.setattr(backend, "member_profile", lambda bioguide_id: {
+        "depiction": {"imageUrl": f"https://example.test/{bioguide_id}.jpg"},
+    })
+
+    client = backend.app.test_client()
+    response = client.post("/reps", json={"address": "350 5th Ave New York, NY 10001"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["representative"]["depiction"]["imageUrl"] == "https://example.test/O000172.jpg"
+    assert payload["senators"][0]["depiction"]["imageUrl"] == "https://example.test/S000001.jpg"
 
 
 def test_reps_endpoint_returns_representative_name_match(monkeypatch):

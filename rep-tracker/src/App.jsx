@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react"
 
 const ITEMS_PER_PAGE = 5
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5000"
+const DEFAULT_API_HOST = typeof window === "undefined" ? "localhost" : window.location.hostname || "localhost"
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${DEFAULT_API_HOST}:5000`
 const SEARCH_MODES = {
   address: {
     label: "Address",
     inputLabel: "Your address",
-    placeholder: "350 5th Ave New York, NY 10001",
+    placeholder: "350 5th Ave, New York",
     helper: "We only use your address to identify your district. Complete addresses work best.",
   },
   district: {
@@ -18,7 +19,7 @@ const SEARCH_MODES = {
   representative: {
     label: "Representative",
     inputLabel: "Representative name",
-    placeholder: "Alexandria Ocasio-Cortez, Mike Johnson",
+    placeholder: "Alexandria Ocasio-Cortez",
     helper: "Search by a current House member's name if you do not know their district.",
   },
 }
