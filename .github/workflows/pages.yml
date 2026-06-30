@@ -1,0 +1,128 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Test frontend and backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rep-tracker/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: rep-tracker
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: rep-tracker
+        run: npm run lint
+
+      - name: Test frontend
+        working-directory: rep-tracker
+        run: npm test
+
+      - name: Build frontend with local API default
+        working-directory: rep-tracker
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test backend
+        run: python -m pytest rep-tracker/backend
+
+  deploy:
+    name: Build and deploy Pages
+    needs: checks
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Require production API secret
+        env:
+          PAGES_API_BASE_URL: ${{ secrets.PAGES_API_BASE_URL }}
+        run: |
+          if [ -z "$PAGES_API_BASE_URL" ]; then
+            echo "PAGES_API_BASE_URL GitHub secret is required for production Pages builds."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: rep-tracker/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: rep-tracker
+        run: npm ci
+
+      - name: Build frontend for GitHub Pages
+        working-directory: rep-tracker
+        env:
+          VITE_API_BASE_URL: ${{ secrets.PAGES_API_BASE_URL }}
+          VITE_PUBLIC_BASE_PATH: /
+        run: npm run build
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: rep-tracker/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  smoke:
+    name: Smoke check production API
+    needs: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require production API secret
+        env:
+          PAGES_API_BASE_URL: ${{ secrets.PAGES_API_BASE_URL }}
+        run: |
+          if [ -z "$PAGES_API_BASE_URL" ]; then
+            echo "PAGES_API_BASE_URL GitHub secret is required for the production API smoke check."
+            exit 1
+          fi
+          echo "API_BASE_URL=$PAGES_API_BASE_URL" >> "$GITHUB_ENV"
+
+      - name: Check API health
+        run: |
+          curl --fail --show-error --silent "$API_BASE_URL/health"
