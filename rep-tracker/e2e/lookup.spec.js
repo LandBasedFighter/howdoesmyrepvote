@@ -69,7 +69,7 @@ test('address lookup posts address privately and renders results', async ({ page
   await page.getByRole('button', { name: 'Search' }).click()
 
   await expect(page.getByRole('heading', { name: 'NY-14' })).toBeVisible()
-  await expect(page.getByText('Alexandria Ocasio-Cortez')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Alexandria Ocasio-Cortez' })).toBeVisible()
   expect(requests[0]).toMatchObject({
     method: 'POST',
     postData: { address: '350 5th Ave New York, NY 10001' },
@@ -86,7 +86,7 @@ test('district lookup uses query params and renders results', async ({ page }) =
   await page.getByLabel('Congressional district').fill('New York 14')
   await page.getByRole('button', { name: 'Search' }).click()
 
-  await expect(page.getByText('Alexandria Ocasio-Cortez')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Alexandria Ocasio-Cortez' })).toBeVisible()
   expect(requests[0]).toMatchObject({
     method: 'GET',
     postData: null,
@@ -107,7 +107,7 @@ test('representative autocomplete selection searches immediately', async ({ page
   )
   await page.getByLabel('Representative name').fill('Alexandria Ocasio-Cortez')
 
-  await expect(page.getByText('Alexandria Ocasio-Cortez')).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Alexandria Ocasio-Cortez' })).toBeVisible()
   expect(requests.at(-1)).toMatchObject({
     method: 'GET',
     postData: null,
