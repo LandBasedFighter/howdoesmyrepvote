@@ -1027,6 +1027,63 @@ def district_label(state, district):
         return f"{state}-{district}"
 
 
+def normalized_district(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.upper() in {"AL", "AT-LARGE", "AT LARGE", "0", "00"}:
+        return "AL"
+    digits = re.search(r"\d+", text)
+    if not digits:
+        return None
+    return str(int(digits.group(0)))
+
+
+def member_name_text(member):
+    return " ".join(
+        str(member.get(key) or "")
+        for key in ("name", "directOrderName", "firstName", "lastName", "honorificName")
+    )
+
+
+def find_house_member_by_name(query):
+    normalized_query = normalize_name_key(query)
+    if len(normalized_query) < 2:
+        return None
+    query_terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 1]
+
+    def fetch_match():
+        partial_match = None
+        for state in STATE_NAMES:
+            for member in congress_state_members(state):
+                if last_chamber(member) != "House of Representatives":
+                    continue
+                name_text = member_name_text(member)
+                normalized_name = normalize_name_key(name_text)
+                if normalized_name == normalized_query:
+                    return member
+                if (
+                    partial_match is None
+                    and (normalized_query in normalized_name or all(term in name_text.casefold() for term in query_terms))
+                ):
+                    partial_match = member
+        return partial_match
+
+    return cached(("house-member-name", normalized_query), fetch_match)
+
+
+def build_reps_response(state, district, county=None):
+    representative, senators = find_representatives(state, district)
+    return {
+        "state": state,
+        "district": district,
+        "districtDescription": district_area_description(state, district, county),
+        "districtLabel": district_label(state, district),
+        "senators": senators,
+        "representative": representative,
+    }
+
+
 def ordinal(value):
     if str(value).upper() == "AL":
         return "at-large"
@@ -1189,22 +1246,34 @@ def health():
 @app.route("/reps")
 def get_reps():
     address = request.args.get("address", "").strip()
+    state_arg = request.args.get("state", "").strip().upper()
+    district_arg = request.args.get("district", "").strip()
+    representative_arg = request.args.get("representative", "").strip()
+
+    if state_arg or district_arg:
+        district = normalized_district(district_arg)
+        if state_arg not in STATE_NAMES or not district:
+            return jsonify({"error": "provide a valid state and district"}), 400
+        return jsonify(build_reps_response(state_arg, district))
+
+    if representative_arg:
+        member = find_house_member_by_name(representative_arg)
+        if not member:
+            return jsonify({"error": "could not find a current House representative by that name"}), 404
+        state = member_state_code(member)
+        district = normalized_district(member.get("district"))
+        if not state or not district:
+            return jsonify({"error": "could not identify that representative's current district"}), 404
+        return jsonify(build_reps_response(state, district))
+
     if not address:
-        return jsonify({"error": "no address provided"}), 400
+        return jsonify({"error": "provide an address or district"}), 400
 
     state, district, county = geocode_address(address)
     if not state:
         return jsonify({"error": "could not geocode address"}), 400
 
-    representative, senators = find_representatives(state, district)
-    return jsonify({
-        "state": state,
-        "district": district,
-        "districtDescription": district_area_description(state, district, county),
-        "districtLabel": district_label(state, district),
-        "senators": senators,
-        "representative": representative,
-    })
+    return jsonify(build_reps_response(state, district, county))
 
 
 @app.route("/member/<bioguide_id>/legislation")

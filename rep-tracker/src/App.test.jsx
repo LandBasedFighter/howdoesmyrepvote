@@ -14,7 +14,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /search/i }))
 
-    expect(screen.getByText('Enter an address to search.')).toBeInTheDocument()
+    expect(screen.getByText(/try a full address/i)).toBeInTheDocument()
   })
 
   it('surfaces local API connection failures', async () => {
@@ -72,5 +72,74 @@ describe('App', () => {
     expect(screen.getByText('Senator Two')).toBeInTheDocument()
     expect(screen.getByText('NY-12')).toBeInTheDocument()
     expect(screen.getByText('NY-12 includes the area around this address in New York County, NY.')).toBeInTheDocument()
+  })
+
+  it('searches by congressional district without an address', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: () => Promise.resolve({
+        state: 'NY',
+        district: '12',
+        districtDescription: 'Covers much of Manhattan.',
+        districtLabel: 'NY-12',
+        representative: {
+          bioguideId: 'R000000',
+          name: 'Nadler, Jerrold',
+          partyName: 'Democratic',
+          terms: { item: [{ chamber: 'House of Representatives' }] },
+        },
+        senators: [],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('tab', { name: /district/i }))
+    fireEvent.change(screen.getByLabelText(/congressional district/i), {
+      target: { value: 'New York 12' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('Jerrold Nadler')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:5000/reps?state=NY&district=12')
+  })
+
+  it('searches by representative name', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: () => Promise.resolve({
+        state: 'NY',
+        district: '14',
+        districtDescription: 'Covers parts of New York City.',
+        districtLabel: 'NY-14',
+        representative: {
+          bioguideId: 'O000172',
+          name: 'Ocasio-Cortez, Alexandria',
+          partyName: 'Democratic',
+          terms: { item: [{ chamber: 'House of Representatives' }] },
+        },
+        senators: [],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('tab', { name: /representative/i }))
+    fireEvent.change(screen.getByLabelText(/representative name/i), {
+      target: { value: 'Alexandria Ocasio-Cortez' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('Alexandria Ocasio-Cortez')).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:5000/reps?representative=Alexandria%20Ocasio-Cortez')
+  })
+
+  it('explains why ZIP-only address searches are ambiguous', () => {
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '10001' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(screen.getByText(/may overlap multiple districts/i)).toBeInTheDocument()
   })
 })

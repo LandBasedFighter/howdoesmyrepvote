@@ -151,6 +151,32 @@ h3 {
   font-weight: 800;
 }
 
+.search-mode-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-strong);
+}
+
+.search-mode-tabs button {
+  padding: 9px 12px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  font-weight: 900;
+  transition: color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.search-mode-tabs button.active {
+  color: var(--accent-dark);
+  background: var(--surface);
+  box-shadow: 0 6px 14px rgba(33, 26, 22, 0.08);
+}
+
 .search-row {
   display: flex;
   gap: 10px;

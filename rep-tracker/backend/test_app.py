@@ -104,6 +104,65 @@ def test_reps_endpoint_returns_geocoded_members(monkeypatch):
     }
 
 
+def test_reps_endpoint_returns_district_members_without_geocoding(monkeypatch):
+    def fail_geocode(address):
+        raise AssertionError("district searches should not geocode an address")
+
+    monkeypatch.setattr(backend, "geocode_address", fail_geocode)
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers much of Manhattan.")
+    monkeypatch.setattr(backend, "find_representatives", lambda state, district: (
+        {"name": "Rep Example"},
+        [{"name": "Senator Example"}],
+    ))
+
+    client = backend.app.test_client()
+    response = client.get("/reps?state=ny&district=12th")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "district": "12",
+        "districtDescription": "Covers much of Manhattan.",
+        "districtLabel": "NY-12",
+        "representative": {"name": "Rep Example"},
+        "senators": [{"name": "Senator Example"}],
+        "state": "NY",
+    }
+
+
+def test_reps_endpoint_returns_representative_name_match(monkeypatch):
+    def state_members(state):
+        if state != "NY":
+            return []
+        return [
+            {
+                "name": "Ocasio-Cortez, Alexandria",
+                "district": 14,
+                "terms": {"item": [{"chamber": "House of Representatives", "stateCode": "NY"}]},
+            },
+            {"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "NY"}]}},
+        ]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers parts of New York City.")
+
+    client = backend.app.test_client()
+    response = client.get("/reps?representative=Alexandria%20Ocasio-Cortez")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "district": "14",
+        "districtDescription": "Covers parts of New York City.",
+        "districtLabel": "NY-14",
+        "representative": {
+            "district": 14,
+            "name": "Ocasio-Cortez, Alexandria",
+            "terms": {"item": [{"chamber": "House of Representatives", "stateCode": "NY"}]},
+        },
+        "senators": [{"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "NY"}]}}],
+        "state": "NY",
+    }
+
+
 def test_compact_district_extract_prefers_geography_over_tautology():
     extract = (
         "Georgia's 4th congressional district is a congressional district in Georgia. "

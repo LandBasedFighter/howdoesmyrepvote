@@ -2,6 +2,119 @@ import { useState } from "react"
 
 const ITEMS_PER_PAGE = 5
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5000"
+const SEARCH_MODES = {
+  address: {
+    label: "Address",
+    inputLabel: "Your address",
+    placeholder: "350 5th Ave New York, NY 10001",
+    helper: "We only use your address to identify your district. Complete addresses work best.",
+  },
+  district: {
+    label: "District",
+    inputLabel: "Congressional district",
+    placeholder: "NY-12 or New York 12",
+    helper: "Search directly by district name or code, such as NY-12, New York 12, California 30, or Vermont at-large.",
+  },
+  representative: {
+    label: "Representative",
+    inputLabel: "Representative name",
+    placeholder: "Alexandria Ocasio-Cortez, Mike Johnson",
+    helper: "Search by a current House member's name if you do not know their district.",
+  },
+}
+const STATE_NAMES = {
+  AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
+  CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
+  HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa",
+  KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland",
+  MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi",
+  MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire",
+  NJ: "New Jersey", NM: "New Mexico", NY: "New York", NC: "North Carolina",
+  ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania",
+  RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee",
+  TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington",
+  WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming",
+}
+const STATE_ABBREVIATIONS = Object.fromEntries(Object.entries(STATE_NAMES).map(([code, name]) => [name.toLowerCase(), code]))
+const HOUSE_DISTRICT_COUNTS = {
+  AL: 7, AK: 1, AZ: 9, AR: 4, CA: 52, CO: 8, CT: 5, DE: 1, FL: 28, GA: 14,
+  HI: 2, ID: 2, IL: 17, IN: 9, IA: 4, KS: 4, KY: 6, LA: 6, ME: 2, MD: 8,
+  MA: 9, MI: 13, MN: 8, MS: 4, MO: 8, MT: 2, NE: 3, NV: 4, NH: 2, NJ: 12,
+  NM: 3, NY: 26, NC: 14, ND: 1, OH: 15, OK: 5, OR: 6, PA: 17, RI: 2, SC: 7,
+  SD: 1, TN: 9, TX: 38, UT: 4, VT: 1, VA: 11, WA: 10, WV: 2, WI: 8, WY: 1,
+}
+const AT_LARGE_STATES = new Set(["AK", "DE", "ND", "SD", "VT", "WY"])
+const DISTRICT_OPTIONS = Object.entries(HOUSE_DISTRICT_COUNTS).flatMap(([state, count]) => {
+  if (AT_LARGE_STATES.has(state)) {
+    return [{
+      state,
+      district: "AL",
+      label: `${state}-AL`,
+      display: `${STATE_NAMES[state]}'s at-large congressional district`,
+    }]
+  }
+  return Array.from({ length: count }, (_, index) => {
+    const district = String(index + 1)
+    return {
+      state,
+      district,
+      label: `${state}-${district}`,
+      display: `${STATE_NAMES[state]}'s ${ordinal(district)} congressional district`,
+    }
+  })
+})
+
+function ordinal(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return String(value)
+  if (number % 100 >= 11 && number % 100 <= 13) return `${number}th`
+  return `${number}${{ 1: "st", 2: "nd", 3: "rd" }[number % 10] ?? "th"}`
+}
+
+function normalizeDistrictNumber(value) {
+  const normalized = String(value || "").trim().toLowerCase()
+  if (/\bat[- ]?large\b/.test(normalized)) return "AL"
+  if (["al", "at-large", "at large", "0", "00"].includes(normalized)) return "AL"
+  const match = normalized.match(/\d+/)
+  return match ? String(Number(match[0])) : ""
+}
+
+function parseDistrictSearch(value) {
+  const normalized = value.trim().replace(/[.,]/g, " ").replace(/\s+/g, " ")
+  if (!normalized) return null
+
+  const compactMatch = normalized.match(/^([a-z]{2})\s*-?\s*(\d+|al|at-large|at large)$/i)
+  if (compactMatch) {
+    return {
+      state: compactMatch[1].toUpperCase(),
+      district: normalizeDistrictNumber(compactMatch[2]),
+    }
+  }
+
+  const stateName = Object.keys(STATE_ABBREVIATIONS)
+    .sort((a, b) => b.length - a.length)
+    .find(name => normalized.toLowerCase().includes(name))
+  if (stateName) {
+    return {
+      state: STATE_ABBREVIATIONS[stateName],
+      district: normalizeDistrictNumber(normalized),
+    }
+  }
+
+  return null
+}
+
+function districtSuggestions(value) {
+  const normalized = value.trim().toLowerCase()
+  if (normalized.length < 2) return []
+  return DISTRICT_OPTIONS
+    .filter(option => (
+      option.label.toLowerCase().includes(normalized)
+      || option.display.toLowerCase().includes(normalized)
+      || `${option.state}${option.district}`.toLowerCase().includes(normalized.replace(/[^a-z0-9]/g, ""))
+    ))
+    .slice(0, 8)
+}
 
 function getPartyClass(partyName) {
   if (partyName === "Democratic") return "party-democratic"
@@ -332,22 +445,40 @@ function MemberCard({ member, chamber }) {
 }
 
 function App() {
-  const [address, setAddress] = useState("")
+  const [searchMode, setSearchMode] = useState("address")
+  const [searchText, setSearchText] = useState("")
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const mode = SEARCH_MODES[searchMode]
+  const suggestions = searchMode === "district" ? districtSuggestions(searchText) : []
 
   async function fetchReps() {
-    const trimmedAddress = address.trim()
-    if (!trimmedAddress) {
-      setError("Enter an address to search.")
+    const trimmedSearch = searchText.trim()
+    if (!trimmedSearch) {
+      setError('Try a full address like "350 5th Ave New York, NY" or a district like "NY-12."')
+      return
+    }
+    if (searchMode === "address" && /^\d{5}(?:-\d{4})?$/.test(trimmedSearch)) {
+      setError(`ZIP ${trimmedSearch.slice(0, 5)} may overlap multiple districts. Try a full address or switch to district search.`)
       return
     }
     setLoading(true)
     setError("")
     setData(null)
     try {
-      const res = await fetch(`${API_BASE_URL}/reps?address=${encodeURIComponent(trimmedAddress)}`)
+      let url = `${API_BASE_URL}/reps?address=${encodeURIComponent(trimmedSearch)}`
+      if (searchMode === "district") {
+        const districtMatch = parseDistrictSearch(trimmedSearch)
+        if (!districtMatch?.state || !districtMatch?.district) {
+          setError('Try a district like "NY-12", "New York 12", or "Vermont at-large."')
+          return
+        }
+        url = `${API_BASE_URL}/reps?state=${encodeURIComponent(districtMatch.state)}&district=${encodeURIComponent(districtMatch.district)}`
+      } else if (searchMode === "representative") {
+        url = `${API_BASE_URL}/reps?representative=${encodeURIComponent(trimmedSearch)}`
+      }
+      const res = await fetch(url)
       const json = await res.json()
       if (json.error) {
         setError(json.error)
@@ -368,29 +499,56 @@ function App() {
           <p className="eyebrow">Congressional lookup</p>
           <h1>Find your representatives and how they vote.</h1>
           <p className="hero-copy">
-            Enter a street address to identify your House district, senators, recent votes, and sponsored legislation.
+            Enter a street address or congressional district to find your House member, senators, recent votes, and sponsored legislation.
           </p>
         </div>
 
         <div className="search-card">
-          <label htmlFor="address">Your address</label>
+          <div className="search-mode-tabs" role="tablist" aria-label="Search type">
+            {Object.entries(SEARCH_MODES).map(([key, config]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={searchMode === key}
+                className={searchMode === key ? "active" : ""}
+                onClick={() => {
+                  setSearchMode(key)
+                  setError("")
+                  setData(null)
+                }}
+                disabled={loading}
+              >
+                {config.label}
+              </button>
+            ))}
+          </div>
+          <label htmlFor="search-text">{mode.inputLabel}</label>
           <div className="search-row">
             <input
-              id="address"
+              id="search-text"
               type="text"
-              placeholder="350 5th Ave New York, NY 10001"
-              value={address}
-              onChange={e => setAddress(e.target.value)}
+              placeholder={mode.placeholder}
+              value={searchText}
+              onChange={e => setSearchText(e.target.value)}
               onKeyDown={e => e.key === "Enter" && fetchReps()}
               disabled={loading}
+              list={searchMode === "district" ? "district-options" : undefined}
             />
+            {searchMode === "district" && (
+              <datalist id="district-options">
+                {suggestions.map(option => (
+                  <option key={option.label} value={option.label}>{option.display}</option>
+                ))}
+              </datalist>
+            )}
             <button className="primary-button" onClick={fetchReps} disabled={loading}>
               <LoadingButtonContent loading={loading} loadingText="Searching">
                 Search
               </LoadingButtonContent>
             </button>
           </div>
-          <p className="helper-text">Powered by Census geocoding and congressional vote data. Performs best with complete addresses (e.g., 350 5th Ave New York, NY 10001).</p>
+          <p className="helper-text">{mode.helper}</p>
         </div>
       </section>
 
