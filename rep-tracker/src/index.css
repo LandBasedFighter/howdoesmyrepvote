@@ -145,9 +145,12 @@ h3 {
 .search-mode-tabs {
   --tab-gap: 6px;
   --tab-padding: 5px;
+  --tab-one: 0.82fr;
+  --tab-two: 0.82fr;
+  --tab-three: 1.36fr;
   position: relative;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, var(--tab-one)) minmax(0, var(--tab-two)) minmax(0, var(--tab-three));
   gap: var(--tab-gap);
   margin-bottom: 16px;
   padding: var(--tab-padding);
@@ -160,7 +163,7 @@ h3 {
 .search-mode-tabs::before {
   position: absolute;
   inset: var(--tab-padding) auto var(--tab-padding) var(--tab-padding);
-  width: calc((100% - (var(--tab-padding) * 2) - (var(--tab-gap) * 2)) / 3);
+  width: calc((100% - (var(--tab-padding) * 2) - (var(--tab-gap) * 2)) * 0.82 / 3);
   border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 6px 14px rgba(33, 26, 22, 0.08);
@@ -173,17 +176,21 @@ h3 {
 }
 
 .search-mode-tabs[data-active="representative"]::before {
-  transform: translateX(calc(200% + (var(--tab-gap) * 2)));
+  width: calc((100% - (var(--tab-padding) * 2) - (var(--tab-gap) * 2)) * 1.36 / 3);
+  transform: translateX(calc((100% * 1.2059) + (var(--tab-gap) * 2)));
 }
 
 .search-mode-tabs button {
   position: relative;
   z-index: 1;
-  padding: 9px 12px;
+  min-width: 0;
+  padding: 9px 6px;
   border-radius: 10px;
   color: var(--muted);
   background: transparent;
+  font-size: clamp(0.7rem, 1.75vw, 0.9rem);
   font-weight: 900;
+  white-space: nowrap;
   transition: color 180ms ease;
 }
 
@@ -197,6 +204,7 @@ h3 {
 }
 
 .search-row input {
+  flex: 1 1 0;
   width: 100%;
   min-width: 0;
   padding: 14px 16px;
