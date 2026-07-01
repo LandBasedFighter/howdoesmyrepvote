@@ -186,6 +186,12 @@ function formatVoteMeta(vote) {
   return parts
 }
 
+function displayVotePosition(memberName, vote) {
+  const label = vote.voterContext?.positionLabel
+  if (label) return `${memberName} ${label}`
+  return vote.position || "Position unavailable"
+}
+
 function issueExample(issue) {
   const vote = issue.evidence?.[0]
   if (!vote) return ""
@@ -279,6 +285,38 @@ function ResultsSkeleton() {
         ))}
       </div>
     </section>
+  )
+}
+
+function VoteCard({ vote, displayName }) {
+  const context = vote.voterContext
+  const kind = context?.kind || vote.interpretation?.kind
+  const headline = context?.headline || vote.description || "Vote details unavailable"
+  const impact = context?.impact || vote.interpretation?.summary
+  const result = context?.resultLabel || vote.result
+
+  return (
+    <li className={`detail-item vote-card ${context ? "vote-card-contextual" : ""}`}>
+      {kind && (
+        <span className={`vote-kind vote-kind-${kind}`}>
+          {kind === "policy" ? "Policy vote" : "Procedural vote"}
+        </span>
+      )}
+      {context?.issue && <span className="vote-issue">{context.issue}</span>}
+      <div className="detail-title">{headline}</div>
+      {impact && <div className="vote-impact">{impact}</div>}
+      {context?.contextNote && <div className="vote-context-note">{context.contextNote}</div>}
+      {!context && vote.question && vote.question !== vote.description && (
+        <div className="vote-question">{vote.question}</div>
+      )}
+      <div className="vote-row vote-row-prominent">
+        <span className="vote-position">{displayVotePosition(displayName, vote)}</span>
+        {result && <span>{result}</span>}
+      </div>
+      <div className="detail-meta">
+        {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
+      </div>
+    </li>
   )
 }
 
@@ -427,27 +465,7 @@ function MemberCard({ member }) {
           <ul className="detail-list">
             {expandedType === "votes"
               ? expandedItems.map((vote, i) => (
-                <li key={`${vote.rollCall}-${vote.date}-${i}`} className="detail-item">
-                  {vote.interpretation?.kind && (
-                    <span className={`vote-kind vote-kind-${vote.interpretation.kind}`}>
-                      {vote.interpretation.kind === "policy" ? "Policy vote" : "Procedural vote"}
-                    </span>
-                  )}
-                  <div className="detail-title">{vote.description || "Vote details unavailable"}</div>
-                  {vote.interpretation?.summary && (
-                    <div className="vote-summary">{vote.interpretation.summary}</div>
-                  )}
-                  {vote.question && vote.question !== vote.description && (
-                    <div className="vote-question">{vote.question}</div>
-                  )}
-                  <div className="detail-meta">
-                    {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
-                  </div>
-                  <div className="vote-row">
-                    <span className="vote-position">{vote.position || "Position unavailable"}</span>
-                    {vote.result && <span>{vote.result}</span>}
-                  </div>
-                </li>
+                <VoteCard key={`${vote.rollCall}-${vote.date}-${i}`} vote={vote} displayName={displayName} />
               ))
               : expandedItems.map((bill, i) => (
                 <li key={`${bill.type}-${bill.number}-${i}`} className="detail-item">
