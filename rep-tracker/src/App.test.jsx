@@ -138,6 +138,25 @@ describe('App', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:5000/reps?representative=Alexandria%20Ocasio-Cortez')
   })
 
+  it('preloads representative options before the representative tab is opened', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: () => Promise.resolve({
+        representatives: [{
+          bioguideId: 'O000172',
+          display: 'Alexandria Ocasio-Cortez (NY-14)',
+          label: 'Alexandria Ocasio-Cortez',
+          search: 'Ocasio-Cortez, Alexandria',
+        }],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('http://localhost:5000/representatives')
+    })
+  })
+
   it('shows representative autocomplete suggestions', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       json: () => Promise.resolve({
@@ -231,7 +250,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /search/i }))
 
     expect(screen.getByText(/looks like a congressional district/i)).toBeInTheDocument()
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/reps'))).toBe(false)
   })
 
   it('renders voter-facing recent vote context when available', async () => {

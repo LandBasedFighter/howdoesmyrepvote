@@ -23,6 +23,7 @@ MAX_LEGISLATION = 5
 MAX_VOTES = 10
 HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "30"))
 HOUSE_VOTE_WORKERS = int(os.getenv("HOUSE_VOTE_WORKERS", "6"))
+MEMBER_LOOKUP_WORKERS = int(os.getenv("MEMBER_LOOKUP_WORKERS", "12"))
 HOUSE_VOTE_SESSIONS = [
     tuple(int(part) for part in session.strip().split(":", 1))
     for session in os.getenv("HOUSE_VOTE_SESSIONS", "119:2").split(",")
@@ -361,8 +362,10 @@ def member_state_code(member):
     term_state = current_term(member).get("stateCode")
     if term_state:
         return term_state
-    state = member.get("state")
-    return state if isinstance(state, str) and len(state) == 2 else None
+    state = str(member.get("state") or "").strip()
+    if len(state) == 2:
+        return state.upper()
+    return STATE_ABBREVIATIONS.get(state)
 
 
 def normalize_name_key(value):
@@ -1229,6 +1232,14 @@ def normalized_district(value):
     return str(int(digits.group(0)))
 
 
+def member_district(member):
+    district = normalized_district(member.get("district"))
+    if district:
+        return district
+    state = member_state_code(member)
+    return "AL" if state in AT_LARGE_STATES else None
+
+
 def valid_house_district(state, district):
     if state not in HOUSE_DISTRICT_COUNTS or not district:
         return False
@@ -1341,6 +1352,21 @@ def fuzzy_name_match(query_terms, member_terms):
     )
 
 
+def current_house_members():
+    def fetch_members():
+        members = []
+        with ThreadPoolExecutor(max_workers=MEMBER_LOOKUP_WORKERS) as executor:
+            futures = [executor.submit(congress_state_members, state) for state in STATE_NAMES]
+            for future in as_completed(futures):
+                members.extend(
+                    member for member in future.result()
+                    if last_chamber(member) == "House of Representatives"
+                )
+        return members
+
+    return cached(("current-house-members", tuple(STATE_NAMES), MEMBER_LOOKUP_WORKERS), fetch_members)
+
+
 def find_house_member_by_name(query):
     normalized_query = normalize_name_key(query)
     if len(normalized_query) < 2:
@@ -1349,24 +1375,21 @@ def find_house_member_by_name(query):
 
     def fetch_match():
         partial_match = None
-        for state in STATE_NAMES:
-            for member in congress_state_members(state):
-                if last_chamber(member) != "House of Representatives":
-                    continue
-                name_text = member_name_text(member)
-                normalized_name = normalize_name_key(name_text)
-                if normalized_name == normalized_query:
-                    return member
-                member_terms = name_terms(name_text)
-                if (
-                    partial_match is None
-                    and (
-                        normalized_query in normalized_name
-                        or all(term in name_text.casefold() for term in query_terms)
-                        or fuzzy_name_match(query_terms, member_terms)
-                    )
-                ):
-                    partial_match = member
+        for member in current_house_members():
+            name_text = member_name_text(member)
+            normalized_name = normalize_name_key(name_text)
+            if normalized_name == normalized_query:
+                return member
+            member_terms = name_terms(name_text)
+            if (
+                partial_match is None
+                and (
+                    normalized_query in normalized_name
+                    or all(term in name_text.casefold() for term in query_terms)
+                    or fuzzy_name_match(query_terms, member_terms)
+                )
+            ):
+                partial_match = member
         return partial_match
 
     return cached(("house-member-name", normalized_query), fetch_match)
@@ -1375,22 +1398,19 @@ def find_house_member_by_name(query):
 def current_house_member_options():
     def fetch_options():
         options = []
-        for state in STATE_NAMES:
-            for member in congress_state_members(state):
-                if last_chamber(member) != "House of Representatives":
-                    continue
-                district = normalized_district(member.get("district"))
-                state_code = member_state_code(member) or state
-                label = display_member_name(member)
-                if not label or not district:
-                    continue
-                options.append({
-                    "bioguideId": member.get("bioguideId"),
-                    "districtLabel": district_label(state_code, district),
-                    "display": f"{label} ({district_label(state_code, district)})",
-                    "label": label,
-                    "search": member_name_text(member),
-                })
+        for member in current_house_members():
+            district = member_district(member)
+            state_code = member_state_code(member)
+            label = display_member_name(member)
+            if not label or not district or not state_code:
+                continue
+            options.append({
+                "bioguideId": member.get("bioguideId"),
+                "districtLabel": district_label(state_code, district),
+                "display": f"{label} ({district_label(state_code, district)})",
+                "label": label,
+                "search": member_name_text(member),
+            })
         return sorted(options, key=lambda option: option["label"])
 
     return cached(("current-house-member-options",), fetch_options)
@@ -1608,7 +1628,7 @@ def get_reps():
         if not member:
             return jsonify({"error": "Could not find a current House representative by that name."}), 404
         state = member_state_code(member)
-        district = normalized_district(member.get("district"))
+        district = member_district(member)
         if not state or not district:
             return jsonify({"error": "could not identify that representative's current district"}), 404
         return jsonify(build_reps_response(state, district))
