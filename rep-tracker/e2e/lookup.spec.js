@@ -139,6 +139,22 @@ test('representative autocomplete selection searches immediately', async ({ page
   })
 })
 
+test('representative search keeps long names readable in the narrow hero card', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 })
+  await mockApi(page)
+  await page.goto('/')
+
+  await page.getByRole('tab', { name: 'Representative' }).click()
+  await page.getByLabel('Representative name').fill('Alexandria Ocasio-Cortez')
+
+  const inputBox = await page.getByLabel('Representative name').boundingBox()
+  const buttonBox = await page.getByRole('button', { name: 'Search' }).boundingBox()
+
+  expect(inputBox).not.toBeNull()
+  expect(buttonBox).not.toBeNull()
+  expect(buttonBox.y).toBeGreaterThan(inputBox.y + inputBox.height - 1)
+})
+
 test('address mode rejects district-looking, zip-only, and generic text without API calls', async ({ page }) => {
   const requests = []
   await mockApi(page, requests)

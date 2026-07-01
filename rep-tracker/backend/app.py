@@ -31,6 +31,7 @@ HOUSE_VOTE_SESSIONS = [
 ]
 SENATE_BASE_URL = "https://www.senate.gov/legislative/LIS"
 SENATE_VOTE_SCAN_LIMIT = int(os.getenv("SENATE_VOTE_SCAN_LIMIT", "30"))
+SENATE_VOTE_WORKERS = int(os.getenv("SENATE_VOTE_WORKERS", "8"))
 SENATE_VOTE_SESSIONS = [
     tuple(int(part) for part in session.strip().split(":", 1))
     for session in os.getenv("SENATE_VOTE_SESSIONS", "119:2").split(",")
@@ -1050,7 +1051,7 @@ def build_house_vote_index():
             for future in as_completed(futures):
                 detail = future.result()
                 if detail.get("error"):
-                    return detail
+                    continue
                 detail_vote = detail["vote"]
                 member_votes = result_items(detail_vote.get("results"))
                 enriched_votes = [
@@ -1171,19 +1172,27 @@ def build_senate_vote_index():
             xml_text(vote, "vote_number")
             for vote in menu["xml"].findall("./votes/vote")[:SENATE_VOTE_SCAN_LIMIT]
         ]
-        for vote_number in filter(None, vote_numbers):
+        def fetch_detail(vote_number):
             detail = fetch_xml(senate_vote_detail_url(congress, session, vote_number))
             if detail.get("error"):
                 return detail
+            return {"vote": detail["xml"]}
 
-            vote = detail["xml"]
-            enriched_title = senate_document_bill_title(vote)
-            for member_vote in vote.findall("./members/member"):
-                key = senate_vote_member_key(member_vote)
-                if key[0] and key[1]:
-                    votes_by_member.setdefault(key, []).append(
-                        enrich_vote(normalize_senate_member_vote(vote, member_vote, enriched_title))
-                    )
+        with ThreadPoolExecutor(max_workers=max(1, min(SENATE_VOTE_WORKERS, len(vote_numbers) or 1))) as executor:
+            futures = [executor.submit(fetch_detail, vote_number) for vote_number in filter(None, vote_numbers)]
+            for future in as_completed(futures):
+                detail = future.result()
+                if detail.get("error"):
+                    continue
+
+                vote = detail["vote"]
+                enriched_title = senate_document_bill_title(vote)
+                for member_vote in vote.findall("./members/member"):
+                    key = senate_vote_member_key(member_vote)
+                    if key[0] and key[1]:
+                        votes_by_member.setdefault(key, []).append(
+                            enrich_vote(normalize_senate_member_vote(vote, member_vote, enriched_title))
+                        )
 
     return {"source": "senate.gov", "votesByMember": votes_by_member}
 
