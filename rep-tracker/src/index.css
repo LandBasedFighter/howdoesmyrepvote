@@ -598,12 +598,6 @@ h3 {
   background: #fef3c7;
 }
 
-.vote-summary {
-  margin-top: 6px;
-  color: var(--text);
-  font-size: 0.9rem;
-}
-
 .vote-card-contextual {
   background:
     linear-gradient(135deg, rgba(237, 233, 254, 0.45), rgba(255, 250, 243, 0.98)),

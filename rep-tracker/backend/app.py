@@ -586,9 +586,6 @@ def voter_context(vote):
         impact = IMPACT_TEMPLATES.get(issue, LIMITED_CONTEXT_MESSAGE)
         context_note = ""
 
-    if not thin_context and kind == "policy" and impact == LIMITED_CONTEXT_MESSAGE:
-        context_note = ""
-
     return {
         "contextNote": context_note,
         "headline": headline,
