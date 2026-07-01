@@ -425,12 +425,12 @@ ISSUE_TAXONOMY = {
     "Energy, climate & utilities": (
         "energy", "environment", "emission", "climate", "utility", "pipeline", "public lands",
     ),
+    "Healthcare": ("health", "medicaid", "medicare", "drug", "hospital", "veterans health", "care"),
     "Defense, veterans & foreign policy": (
         "defense", "armed forces", "war powers", "iran", "ukraine", "hostilities", "veteran",
         "military", "ambassador", "foreign", "state department",
     ),
     "Housing & homeownership": ("housing", "homeownership", "homeowner", "mortgage", "rent", "zoning"),
-    "Healthcare": ("health", "medicaid", "medicare", "drug", "hospital", "veterans health", "care"),
     "Immigration & border": ("immigration", "border", "asylum", "deport", "visa", "alien"),
     "Budget, taxes & government spending": (
         "appropriations", "budget", "tax", "spending", "debt", "revenue", "fiscal", "deficit",
@@ -533,8 +533,79 @@ def interpret_vote(vote):
     }
 
 
+IMPACT_TEMPLATES = {
+    "Healthcare": "Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.",
+    "Housing & homeownership": "Housing votes can affect rent, mortgages, homeownership costs, zoning, or housing supply.",
+    "Immigration & border": "Immigration and border votes can affect asylum, visas, enforcement, deportation policy, or border operations.",
+    "Defense, veterans & foreign policy": "Defense and foreign policy votes can affect service members, veterans, military action, overseas commitments, or national security spending.",
+    "Budget, taxes & government spending": "Budget and tax votes can affect federal spending, revenue, debt, agency funding, or household tax rules.",
+    "Education & student loans": "Education votes can affect schools, colleges, student debt, and access to education programs.",
+    "Energy, climate & utilities": "Energy and climate votes can affect household energy costs, emissions rules, public lands, or utility policy.",
+    "Federal agency rules & oversight": "Agency oversight votes can affect consumer protections, regulation, agency authority, or how Congress reviews federal rules.",
+    "Cost of living & consumer rules": "Consumer-rule votes can affect prices, fees, credit, household costs, or protections for buyers and borrowers.",
+    "Civil rights & social policy": "Civil rights and social policy votes can affect privacy, discrimination rules, reproductive policy, or religious-liberty disputes.",
+    "Federal courts & nominations": "Nomination votes can affect who interprets federal law and how courts or agencies apply policy over time.",
+}
+
+LIMITED_CONTEXT_MESSAGE = "This vote has limited public context in the scanned roll-call data."
+
+
+def clean_vote_headline(vote):
+    bill = vote.get("bill") or {}
+    headline = vote.get("description") or bill.get("title") or vote.get("question")
+    if not headline:
+        return "Vote details unavailable"
+    return " ".join(str(headline).split())
+
+
+def vote_position_label(position):
+    value = str(position or "").strip()
+    return f"Voted {value}" if value else "Position unavailable"
+
+
+def vote_result_label(result):
+    value = str(result or "").strip()
+    return value if value else "Result unavailable"
+
+
+def voter_context(vote):
+    interpretation = interpret_vote(vote)
+    kind = interpretation["kind"]
+    issue = interpretation["issue"]
+    headline = clean_vote_headline(vote)
+    thin_context = headline == "Vote details unavailable"
+
+    if thin_context:
+        issue = "Other recent policy"
+        impact = LIMITED_CONTEXT_MESSAGE
+        context_note = LIMITED_CONTEXT_MESSAGE
+    elif kind == "procedural":
+        impact = "Procedural votes usually shape debate, timing, or floor handling rather than directly changing policy."
+        context_note = "This is a process vote, so it may not directly decide the underlying bill."
+    else:
+        impact = IMPACT_TEMPLATES.get(issue, LIMITED_CONTEXT_MESSAGE)
+        context_note = ""
+
+    if not thin_context and kind == "policy" and impact == LIMITED_CONTEXT_MESSAGE:
+        context_note = ""
+
+    return {
+        "contextNote": context_note,
+        "headline": headline,
+        "impact": impact,
+        "issue": issue,
+        "kind": kind,
+        "positionLabel": vote_position_label(vote.get("position")),
+        "resultLabel": vote_result_label(vote.get("result")),
+    }
+
+
 def enrich_vote(vote):
-    return {**vote, "interpretation": interpret_vote(vote)}
+    return {
+        **vote,
+        "interpretation": interpret_vote(vote),
+        "voterContext": voter_context(vote),
+    }
 
 
 def policy_snapshot(votes, limit):
