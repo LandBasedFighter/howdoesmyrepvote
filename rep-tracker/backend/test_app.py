@@ -571,6 +571,47 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
     assert calls.count("house-vote/119/2") == 1
 
 
+def test_votes_endpoint_skips_failed_house_roll_call_details(monkeypatch):
+    def fake_congress_get(endpoint, **params):
+        if endpoint == "house-vote/119/2":
+            return {
+                "houseRollCallVotes": [
+                    {"rollCallNumber": "74"},
+                    {"rollCallNumber": "72"},
+                ]
+            }
+        if endpoint == "house-vote/119/2/74/members":
+            return {"error": "temporary roll call failure", "statusCode": 502}
+        if endpoint == "house-vote/119/2/72/members":
+            return {
+                "houseRollCallVoteMemberVotes": {
+                    "congress": 119,
+                    "legislationNumber": "2",
+                    "legislationType": "HR",
+                    "result": "Passed",
+                    "results": [{"bioguideID": "R000000", "voteCast": "Yea"}],
+                    "rollCallNumber": "72",
+                    "sessionNumber": 2,
+                    "startDate": "2026-01-02T12:00:00-05:00",
+                    "voteQuestion": "On Passage",
+                    "voteType": "Yea and Nay",
+                }
+            }
+        if endpoint == "bill/119/hr/2":
+            return {"bill": {"latestTitle": "Reliable Vote Act"}}
+        if endpoint == "bill/119/hr/2/summaries":
+            return {"summaries": [{"text": "This bill would keep vote pages useful when one upstream roll call fails."}]}
+        return {"houseRollCallVoteMemberVotes": {"results": []}}
+
+    monkeypatch.setattr(backend, "HOUSE_VOTE_SESSIONS", [(119, 2)])
+    monkeypatch.setattr(backend, "congress_get", fake_congress_get)
+
+    response = backend.app.test_client().get("/member/R000000/votes")
+
+    assert response.status_code == 200
+    assert [vote["rollCall"] for vote in response.get_json()["votes"]] == ["72"]
+
+
 def test_votes_endpoint_filters_senate_roll_call_xml(monkeypatch):
     menu_xml = ET.fromstring("""
         <vote_summary>
@@ -660,6 +701,60 @@ def test_votes_endpoint_filters_senate_roll_call_xml(monkeypatch):
             "resultLabel": "Rejected (47-50)",
         },
     }]
+
+
+def test_senate_vote_index_fetches_roll_call_details_concurrently(monkeypatch):
+    menu_xml = ET.fromstring("""
+        <vote_summary>
+          <votes>
+            <vote><vote_number>00101</vote_number></vote>
+            <vote><vote_number>00102</vote_number></vote>
+            <vote><vote_number>00103</vote_number></vote>
+            <vote><vote_number>00104</vote_number></vote>
+            <vote><vote_number>00105</vote_number></vote>
+            <vote><vote_number>00106</vote_number></vote>
+            <vote><vote_number>00107</vote_number></vote>
+            <vote><vote_number>00108</vote_number></vote>
+          </votes>
+        </vote_summary>
+    """)
+
+    def detail_xml(vote_number):
+        return ET.fromstring(f"""
+            <roll_call_vote>
+              <congress>119</congress>
+              <session>2</session>
+              <vote_number>{int(vote_number)}</vote_number>
+              <vote_date>24-Jun</vote_date>
+              <vote_title>Example vote {int(vote_number)}</vote_title>
+              <question>On Passage</question>
+              <vote_result_text>Passed</vote_result_text>
+              <members>
+                <member>
+                  <last_name>Warnock</last_name>
+                  <first_name>Raphael</first_name>
+                  <state>GA</state>
+                  <vote_cast>Yea</vote_cast>
+                </member>
+              </members>
+            </roll_call_vote>
+        """)
+
+    def fake_fetch_xml(url):
+        if "vote_menu_119_2.xml" in url:
+            return {"xml": menu_xml}
+        sleep(0.03)
+        return {"xml": detail_xml(url.rsplit("_", 1)[1].removesuffix(".xml"))}
+
+    monkeypatch.setattr(backend, "SENATE_VOTE_SESSIONS", [(119, 2)])
+    monkeypatch.setattr(backend, "fetch_xml", fake_fetch_xml)
+
+    started_at = perf_counter()
+    index = backend.build_senate_vote_index()
+    elapsed = perf_counter() - started_at
+
+    assert len(index["votesByMember"][("warnock", "GA")]) == 8
+    assert elapsed < 0.18
 
 
 def test_policy_snapshot_prioritizes_policy_votes():

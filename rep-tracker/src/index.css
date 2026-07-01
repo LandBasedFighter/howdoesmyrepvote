@@ -125,6 +125,7 @@ h3 {
 }
 
 .search-card {
+  container-type: inline-size;
   width: 100%;
   justify-self: end;
   padding: 24px;
@@ -201,6 +202,13 @@ h3 {
 .search-row {
   display: flex;
   gap: 10px;
+}
+
+@container (max-width: 430px) {
+  .search-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .search-row input {
