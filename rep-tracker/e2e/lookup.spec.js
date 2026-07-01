@@ -31,8 +31,30 @@ const representativeOptions = {
   }],
 }
 
+const votesPayload = {
+  votes: [{
+    bill: { number: '6329', title: 'Veterans Health Care Improvement Act', type: 'HR' },
+    date: '2026-01-01T12:00:00-05:00',
+    description: 'Veterans Health Care Improvement Act',
+    position: 'Yea',
+    result: 'Passed',
+    rollCall: '74',
+    source: 'congress.gov',
+    voterContext: {
+      contextNote: '',
+      headline: 'Veterans Health Care Improvement Act',
+      impact: 'Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.',
+      issue: 'Healthcare',
+      kind: 'policy',
+      positionLabel: 'Voted Yea',
+      resultLabel: 'Passed',
+    },
+  }],
+}
+
 async function mockApi(page, requests = []) {
   await page.route('**/representatives', route => route.fulfill({ json: representativeOptions }))
+  await page.route('**/member/*/votes**', route => route.fulfill({ json: votesPayload }))
   await page.route('**/reps**', async route => {
     const request = route.request()
     requests.push({
@@ -154,4 +176,18 @@ test('district lookup surfaces out-of-range district errors', async ({ page }) =
   await page.getByRole('button', { name: 'Search' }).click()
 
   await expect(page.getByText('No current House representative found for CA-99.')).toBeVisible()
+})
+
+test('recent votes render voter-facing context cards', async ({ page }) => {
+  await mockApi(page)
+  await page.goto('/')
+
+  await page.getByLabel('Your address').fill('350 5th Ave New York, NY 10001')
+  await page.getByRole('button', { name: 'Search' }).click()
+  await page.getByRole('button', { name: 'Recent votes' }).first().click()
+
+  await expect(page.getByText('Veterans Health Care Improvement Act')).toBeVisible()
+  await expect(page.getByText(/Healthcare votes can affect care access/)).toBeVisible()
+  await expect(page.getByText('Alexandria Ocasio-Cortez Voted Yea')).toBeVisible()
+  await expect(page.getByText('Healthcare').first()).toBeVisible()
 })
