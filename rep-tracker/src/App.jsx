@@ -700,12 +700,12 @@ function App() {
     </main>
 
       <footer className="site-footer">
-        <span>© 2026 Morgan Guinyard</span>
-        <nav aria-label="Morgan Guinyard links">
-          <a href="https://vote.gov">Register to vote</a>
-          <a href="mailto:moguinyard@gmail.com">Email</a>
-          <a href="https://github.com/LandBasedFighter">GitHub</a>
-          <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">LinkedIn</a>
+        <span>© 2026 morgan guinyard</span>
+        <nav aria-label="morgan guinyard links">
+          <a href="https://vote.gov">register to vote</a>
+          <a href="mailto:moguinyard@gmail.com">email</a>
+          <a href="https://github.com/LandBasedFighter">github</a>
+          <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">linkedin</a>
         </nav>
       </footer>
     </>
