@@ -415,6 +415,8 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
             }
         if endpoint == "bill/119/hr/1":
             return {"bill": {"latestTitle": "Example Act"}}
+        if endpoint == "bill/119/hr/1/summaries":
+            return {"summaries": [{"text": "This bill would make example grants easier to use."}]}
         return {"houseRollCallVoteMemberVotes": {"results": []}}
 
     monkeypatch.setattr(backend, "HOUSE_VOTE_SESSIONS", [(119, 2)])
@@ -446,12 +448,14 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
         "type": "Yea and Nay",
         "voterContext": {
             "contextNote": "",
+            "contextSource": "congress.gov bill summary",
             "headline": "Example Act",
-            "impact": "This vote has limited public context in the scanned roll-call data.",
+            "impact": "This bill would make example grants easier to use.",
             "issue": "Other recent policy",
             "kind": "policy",
             "positionLabel": "Voted Aye",
             "resultLabel": "Passed",
+            "sourceSummary": "This bill would make example grants easier to use.",
         },
     }
     assert votes[1]["interpretation"]["kind"] == "procedural"
@@ -652,6 +656,93 @@ def test_voter_context_uses_conservative_fallback_for_thin_votes():
         "positionLabel": "Position unavailable",
         "resultLabel": "Result unavailable",
     }
+
+
+def test_plain_english_bill_context_cleans_jargon_and_html():
+    text = "<p>This bill would prohibit agencies, pursuant to existing law, from issuing rules with respect to home appliances.</p>"
+
+    assert backend.plain_english_bill_context(text) == (
+        "This bill would block agencies, under existing law, from issuing rules about home appliances."
+    )
+
+
+def test_bill_context_uses_congress_summary(monkeypatch):
+    calls = []
+
+    def fake_congress_get(endpoint, **params):
+        calls.append((endpoint, params))
+        assert endpoint == "bill/119/hr/6398/summaries"
+        return {
+            "summaries": [{
+                "text": "<p>This bill would require agencies to publish plain-language guidance for small businesses.</p>",
+            }],
+        }
+
+    monkeypatch.setattr(backend, "congress_get", fake_congress_get)
+
+    context = backend.bill_context({
+        "bill": {"number": "6398", "type": "HR"},
+        "congress": 119,
+    })
+
+    assert context == {
+        "contextSource": "congress.gov bill summary",
+        "sourceSummary": "This bill would make agencies publish plain-language guidance for small businesses.",
+        "summary": "This bill would make agencies publish plain-language guidance for small businesses.",
+    }
+    assert len(calls) == 1
+
+
+def test_bill_context_falls_back_to_latest_action(monkeypatch):
+    def fake_congress_get(endpoint, **params):
+        if endpoint == "bill/119/hr/6409/summaries":
+            return {"summaries": []}
+        if endpoint == "bill/119/hr/6409/actions":
+            return {
+                "actions": [{
+                    "text": "Passed House pursuant to the rule.",
+                    "actionDate": "2026-04-16",
+                }],
+            }
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(backend, "congress_get", fake_congress_get)
+
+    context = backend.bill_context({
+        "bill": {"number": "6409", "type": "HR"},
+        "congress": 119,
+    })
+
+    assert context == {
+        "contextSource": "congress.gov latest action",
+        "sourceSummary": "Passed House under the rule.",
+        "summary": "Latest action: Passed House under the rule.",
+    }
+
+
+def test_enrich_vote_uses_bill_context_for_voter_impact():
+    vote = {
+        "bill": {"number": "40", "title": "Directing removal of U.S. Armed Forces from hostilities with Iran", "type": "HCONRES"},
+        "congress": 119,
+        "description": "Directing removal of U.S. Armed Forces from hostilities with Iran",
+        "position": "Nay",
+        "question": "On Agreeing to the Resolution",
+        "result": "Failed",
+    }
+
+    enriched = backend.enrich_vote(vote, {
+        "contextSource": "congress.gov bill summary",
+        "sourceSummary": "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them.",
+        "summary": "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them.",
+    })
+
+    assert enriched["voterContext"]["impact"] == (
+        "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them."
+    )
+    assert enriched["voterContext"]["contextSource"] == "congress.gov bill summary"
+    assert enriched["voterContext"]["sourceSummary"] == (
+        "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them."
+    )
 
 
 def test_congress_legislation_endpoint_converts_public_bill_urls():

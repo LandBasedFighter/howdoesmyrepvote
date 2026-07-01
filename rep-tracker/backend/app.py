@@ -597,12 +597,31 @@ def voter_context(vote):
     }
 
 
-def enrich_vote(vote):
+def enrich_vote(vote, bill_context_data=None):
+    context = voter_context(vote)
+    if bill_context_data:
+        context = {
+            **context,
+            "impact": bill_context_data["summary"],
+            "sourceSummary": bill_context_data["sourceSummary"],
+            "contextSource": bill_context_data["contextSource"],
+        }
     return {
         **vote,
         "interpretation": interpret_vote(vote),
-        "voterContext": voter_context(vote),
+        "voterContext": context,
     }
+
+
+def enrich_votes_with_bill_context(votes):
+    if not votes:
+        return []
+    contexts = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(HOUSE_VOTE_WORKERS, len(votes)))) as executor:
+        future_map = {executor.submit(safe_bill_context, vote): index for index, vote in enumerate(votes)}
+        for future in as_completed(future_map):
+            contexts[future_map[future]] = future.result()
+    return [enrich_vote(vote, contexts.get(index)) for index, vote in enumerate(votes)]
 
 
 def policy_snapshot(votes, limit):
@@ -664,6 +683,32 @@ def plain_text_summary(value, limit=300):
     return text if len(text) <= limit else f"{text[:limit].rstrip()}..."
 
 
+JARGON_REPLACEMENTS = (
+    (r"\bpursuant to\b", "under"),
+    (r"\bwith respect to\b", "about"),
+    (r"\bprovide for consideration of\b", "set debate rules for"),
+    (r"\bprohibit\b", "block"),
+    (r"\brequire agencies to\b", "make agencies"),
+    (r"\brequires agencies to\b", "makes agencies"),
+    (r"\brequiring agencies to\b", "making agencies"),
+)
+
+
+def plain_english_bill_context(text, limit=220):
+    cleaned = plain_text_summary(text, limit=1000)
+    if not cleaned:
+        return None
+    for pattern, replacement in JARGON_REPLACEMENTS:
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0].strip()
+    if not first_sentence:
+        return None
+    if len(first_sentence) <= limit:
+        return first_sentence
+    trimmed = first_sentence[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return f"{trimmed}..."
+
+
 def vote_bill_summary(vote):
     bill = vote.get("bill") or {}
     congress = vote.get("congress")
@@ -687,6 +732,48 @@ def vote_bill_summary(vote):
 def safe_vote_bill_summary(vote):
     try:
         return vote_bill_summary(vote)
+    except (RuntimeError, KeyError, TypeError, ValueError, requests.exceptions.RequestException):
+        return None
+
+
+def bill_context(vote):
+    bill = vote.get("bill") or {}
+    congress = vote.get("congress")
+    bill_type = api_bill_type(bill.get("type"))
+    bill_number = bill.get("number")
+    if not congress or not bill_type or not bill_number:
+        return None
+
+    cache_key = ("bill-context", congress, bill_type, str(bill_number))
+
+    def fetch_context():
+        summaries = congress_get(f"bill/{congress}/{bill_type}/{bill_number}/summaries").get("summaries") or []
+        if summaries:
+            summary = plain_english_bill_context(summaries[0].get("text"))
+            if summary:
+                return {
+                    "contextSource": "congress.gov bill summary",
+                    "sourceSummary": summary,
+                    "summary": summary,
+                }
+
+        actions = congress_get(f"bill/{congress}/{bill_type}/{bill_number}/actions").get("actions") or []
+        for action in actions:
+            action_summary = plain_english_bill_context(action.get("text"))
+            if action_summary:
+                return {
+                    "contextSource": "congress.gov latest action",
+                    "sourceSummary": action_summary,
+                    "summary": f"Latest action: {action_summary}",
+                }
+        return None
+
+    return cached(cache_key, fetch_context)
+
+
+def safe_bill_context(vote):
+    try:
+        return bill_context(vote)
     except (RuntimeError, KeyError, TypeError, ValueError, requests.exceptions.RequestException):
         return None
 
@@ -1579,8 +1666,9 @@ def get_member_votes(bioguide_id):
         pool = member_vote_pool(bioguide_id)
         if pool.get("error"):
             return pool
+        selected_votes = policy_snapshot(pool.get("votes", []), limit)
         return {
-            "votes": policy_snapshot(pool.get("votes", []), limit),
+            "votes": enrich_votes_with_bill_context(selected_votes),
             "source": pool.get("source"),
         }
 
