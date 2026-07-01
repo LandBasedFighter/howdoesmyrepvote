@@ -444,6 +444,15 @@ def test_votes_endpoint_filters_house_roll_call_member_votes(monkeypatch):
         "session": 2,
         "source": "congress.gov",
         "type": "Yea and Nay",
+        "voterContext": {
+            "contextNote": "",
+            "headline": "Example Act",
+            "impact": "This vote has limited public context in the scanned roll-call data.",
+            "issue": "Other recent policy",
+            "kind": "policy",
+            "positionLabel": "Voted Aye",
+            "resultLabel": "Passed",
+        },
     }
     assert votes[1]["interpretation"]["kind"] == "procedural"
 
@@ -533,6 +542,15 @@ def test_votes_endpoint_filters_senate_roll_call_xml(monkeypatch):
         "session": "2",
         "source": "senate.gov",
         "type": "On the Motion to Proceed",
+        "voterContext": {
+            "contextNote": "This is a process vote, so it may not directly decide the underlying bill.",
+            "headline": "Motion to Proceed to S. J. Res. 185; A joint resolution to direct the removal of United States Armed Forces from hostilities.",
+            "impact": "Procedural votes usually shape debate, timing, or floor handling rather than directly changing policy.",
+            "issue": "Procedure",
+            "kind": "procedural",
+            "positionLabel": "Voted Yea",
+            "resultLabel": "Rejected (47-50)",
+        },
     }]
 
 
@@ -577,6 +595,63 @@ def test_vote_kind_keeps_house_rules_votes_procedural():
     }
 
     assert backend.vote_kind(vote) == "procedural"
+
+
+def test_voter_context_explains_healthcare_policy_vote():
+    vote = {
+        "bill": {"title": "Veterans Health Care Improvement Act", "type": "HR", "number": "6329"},
+        "description": "Veterans Health Care Improvement Act",
+        "position": "Yea",
+        "question": "On Passage",
+        "result": "Passed",
+    }
+
+    context = backend.voter_context(vote)
+
+    assert context == {
+        "contextNote": "",
+        "headline": "Veterans Health Care Improvement Act",
+        "impact": "Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.",
+        "issue": "Healthcare",
+        "kind": "policy",
+        "positionLabel": "Voted Yea",
+        "resultLabel": "Passed",
+    }
+
+
+def test_voter_context_explains_procedural_votes_without_overclaiming():
+    vote = {
+        "bill": {"title": "Providing for consideration of H.R. 6329", "type": "HRES", "number": "1075"},
+        "description": "On Ordering the Previous Question",
+        "position": "Yea",
+        "question": "On Ordering the Previous Question",
+        "result": "Passed",
+    }
+
+    context = backend.voter_context(vote)
+
+    assert context["issue"] == "Procedure"
+    assert context["kind"] == "procedural"
+    assert context["headline"] == "On Ordering the Previous Question"
+    assert context["impact"] == "Procedural votes usually shape debate, timing, or floor handling rather than directly changing policy."
+    assert context["contextNote"] == "This is a process vote, so it may not directly decide the underlying bill."
+
+
+def test_voter_context_uses_conservative_fallback_for_thin_votes():
+    context = backend.voter_context({
+        "position": "",
+        "result": "",
+    })
+
+    assert context == {
+        "contextNote": "This vote has limited public context in the scanned roll-call data.",
+        "headline": "Vote details unavailable",
+        "impact": "This vote has limited public context in the scanned roll-call data.",
+        "issue": "Other recent policy",
+        "kind": "procedural",
+        "positionLabel": "Position unavailable",
+        "resultLabel": "Result unavailable",
+    }
 
 
 def test_congress_legislation_endpoint_converts_public_bill_urls():
