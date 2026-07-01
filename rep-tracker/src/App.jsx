@@ -510,7 +510,7 @@ function App() {
   const representativeMatches = searchMode === "representative" ? representativeSuggestions(searchText, representativeOptions) : []
 
   useEffect(() => {
-    if (searchMode !== "representative" || representativeOptions.length > 0) return
+    if (representativeOptions.length > 0) return
 
     let cancelled = false
     async function loadRepresentatives() {
@@ -529,7 +529,7 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [representativeOptions.length, searchMode])
+  }, [representativeOptions.length])
 
   useEffect(() => {
     if (!loading && !data) return

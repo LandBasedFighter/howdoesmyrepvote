@@ -1,5 +1,6 @@
 import os
 import json
+from time import perf_counter, sleep
 from unittest.mock import Mock
 import xml.etree.ElementTree as ET
 
@@ -262,6 +263,109 @@ def test_reps_endpoint_handles_misspelled_representative_name(monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["districtLabel"] == "NY-14"
     assert response.get_json()["representative"]["name"] == "Ocasio-Cortez, Alexandria"
+
+
+def test_reps_endpoint_accepts_representative_with_full_state_name(monkeypatch):
+    def state_members(state):
+        if state != "TN":
+            return []
+        return [
+            {
+                "name": "Ogles, Andrew",
+                "district": 5,
+                "state": "Tennessee",
+                "terms": {"item": [{"chamber": "House of Representatives"}]},
+            },
+            {"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "TN"}]}},
+        ]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers parts of Tennessee.")
+
+    client = backend.app.test_client()
+    response = client.get("/reps?representative=Andrew%20Ogles")
+
+    assert response.status_code == 200
+    assert response.get_json()["districtLabel"] == "TN-5"
+    assert response.get_json()["representative"]["name"] == "Ogles, Andrew"
+
+
+def test_reps_endpoint_accepts_at_large_representative_without_district(monkeypatch):
+    def state_members(state):
+        if state != "VT":
+            return []
+        return [
+            {
+                "name": "Balint, Becca",
+                "state": "Vermont",
+                "terms": {"item": [{"chamber": "House of Representatives"}]},
+            },
+            {"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "VT"}]}},
+        ]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+    monkeypatch.setattr(backend, "wikipedia_district_description", lambda state, district: "Covers Vermont.")
+
+    client = backend.app.test_client()
+    response = client.get("/reps?representative=Becca%20Balint")
+
+    assert response.status_code == 200
+    assert response.get_json()["district"] == "AL"
+    assert response.get_json()["districtLabel"] == "VT-AL"
+    assert response.get_json()["representative"]["name"] == "Balint, Becca"
+
+
+def test_representatives_endpoint_includes_at_large_members_without_district(monkeypatch):
+    def state_members(state):
+        if state != "VT":
+            return []
+        return [
+            {
+                "bioguideId": "B001318",
+                "name": "Balint, Becca",
+                "state": "Vermont",
+                "terms": {"item": [{"chamber": "House of Representatives"}]},
+            },
+            {"name": "Senator Example", "terms": {"item": [{"chamber": "Senate", "stateCode": "VT"}]}},
+        ]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+
+    client = backend.app.test_client()
+    response = client.get("/representatives")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "representatives": [{
+            "bioguideId": "B001318",
+            "display": "Becca Balint (VT-AL)",
+            "districtLabel": "VT-AL",
+            "label": "Becca Balint",
+            "search": "Balint, Becca",
+        }],
+    }
+
+
+def test_representatives_endpoint_fetches_state_members_concurrently(monkeypatch):
+    def state_members(state):
+        sleep(0.02)
+        return [{
+            "bioguideId": f"{state}0001",
+            "name": f"{state} Member",
+            "district": 1,
+            "state": backend.STATE_NAMES[state],
+            "terms": {"item": [{"chamber": "House of Representatives"}]},
+        }]
+
+    monkeypatch.setattr(backend, "congress_state_members", state_members)
+
+    started_at = perf_counter()
+    response = backend.app.test_client().get("/representatives")
+    elapsed = perf_counter() - started_at
+
+    assert response.status_code == 200
+    assert len(response.get_json()["representatives"]) == len(backend.STATE_NAMES)
+    assert elapsed < 0.5
 
 
 def test_representatives_endpoint_returns_autocomplete_options(monkeypatch):

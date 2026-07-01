@@ -1,2 +1,5 @@
 .claude
 .superpowers/
+.env
+__pycache__/**
+.env.example
