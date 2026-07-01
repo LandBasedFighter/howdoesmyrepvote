@@ -292,6 +292,17 @@ describe('App', () => {
     expect(screen.getByText('Passed')).toBeInTheDocument()
     expect(screen.getByText('Healthcare · Policy vote · Roll call 74 · HR 6329')).toBeInTheDocument()
     expect(screen.queryByText('Policy vote')).not.toBeInTheDocument()
+
+    // Verify DOM order: title, impact, position/result, metadata
+    const voteCard = screen.getByText('Veterans Health Care Improvement Act').closest('li')
+    const cardText = voteCard.textContent
+    const titleIndex = cardText.indexOf('Veterans Health Care Improvement Act')
+    const impactIndex = cardText.indexOf('This bill would expand care access for veterans and patients')
+    const positionIndex = cardText.indexOf('Henry C. "Hank" Johnson Voted Yea')
+    const metadataIndex = cardText.indexOf('Healthcare · Policy vote · Roll call 74 · HR 6329')
+    expect(titleIndex).toBeLessThan(impactIndex)
+    expect(impactIndex).toBeLessThan(positionIndex)
+    expect(positionIndex).toBeLessThan(metadataIndex)
   })
 
   it('falls back for recent votes without voter context', async () => {

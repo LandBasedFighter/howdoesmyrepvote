@@ -310,7 +310,6 @@ function VoteCard({ vote, displayName }) {
   return (
     <li className={`detail-item vote-card ${context ? "vote-card-contextual" : ""}`}>
       <div className="detail-title">{headline}</div>
-      {metadata && <div className="vote-metadata-line">{metadata}</div>}
       {impact && <div className="vote-impact">{impact}</div>}
       {context?.contextNote && <div className="vote-context-note">{context.contextNote}</div>}
       {!context && vote.question && vote.question !== vote.description && (
@@ -320,6 +319,7 @@ function VoteCard({ vote, displayName }) {
         <span className="vote-position">{displayVotePosition(displayName, vote)}</span>
         {result && <span>{result}</span>}
       </div>
+      {metadata && <div className="vote-metadata-line">{metadata}</div>}
       <div className="detail-meta">
         {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
       </div>
