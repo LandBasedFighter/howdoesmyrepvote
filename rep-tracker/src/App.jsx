@@ -595,7 +595,8 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
+    <>
+      <main className="app-shell">
       <section className="hero">
         <div>
           <h1>Find your representatives and how they vote.</h1>
@@ -690,6 +691,16 @@ function App() {
         )}
       </div>
     </main>
+
+      <footer className="site-footer">
+        <span>© 2026 Morgan Guinyard</span>
+        <nav aria-label="Morgan Guinyard links">
+          <a href="mailto:moguinyard@gmail.com">Email</a>
+          <a href="https://github.com/LandBasedFighter">GitHub</a>
+          <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">LinkedIn</a>
+        </nav>
+      </footer>
+    </>
   )
 }
 
