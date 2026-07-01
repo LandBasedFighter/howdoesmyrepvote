@@ -192,6 +192,18 @@ function displayVotePosition(memberName, vote) {
   return vote.position || "Position unavailable"
 }
 
+function voteMetadata(vote) {
+  const context = vote.voterContext
+  const kind = context?.kind || vote.interpretation?.kind
+  const bill = vote.bill
+  return [
+    context?.issue,
+    kind ? `${kind[0].toUpperCase()}${kind.slice(1)} vote` : undefined,
+    vote.rollCall ? `Roll call ${vote.rollCall}` : undefined,
+    bill?.type && bill?.number ? `${bill.type} ${bill.number}` : undefined,
+  ].filter(Boolean).join(" · ")
+}
+
 function issueExample(issue) {
   const vote = issue.evidence?.[0]
   if (!vote) return ""
@@ -290,20 +302,15 @@ function ResultsSkeleton() {
 
 function VoteCard({ vote, displayName }) {
   const context = vote.voterContext
-  const kind = context?.kind || vote.interpretation?.kind
+  const metadata = voteMetadata(vote)
   const headline = context?.headline || vote.description || "Vote details unavailable"
   const impact = context?.impact || vote.interpretation?.summary
   const result = context?.resultLabel || vote.result
 
   return (
     <li className={`detail-item vote-card ${context ? "vote-card-contextual" : ""}`}>
-      {kind && (
-        <span className={`vote-kind vote-kind-${kind}`}>
-          {kind === "policy" ? "Policy vote" : "Procedural vote"}
-        </span>
-      )}
-      {context?.issue && <span className="vote-issue">{context.issue}</span>}
       <div className="detail-title">{headline}</div>
+      {metadata && <div className="vote-metadata-line">{metadata}</div>}
       {impact && <div className="vote-impact">{impact}</div>}
       {context?.contextNote && <div className="vote-context-note">{context.contextNote}</div>}
       {!context && vote.question && vote.question !== vote.description && (
@@ -695,6 +702,7 @@ function App() {
       <footer className="site-footer">
         <span>© 2026 Morgan Guinyard</span>
         <nav aria-label="Morgan Guinyard links">
+          <a href="https://vote.gov">Register to vote</a>
           <a href="mailto:moguinyard@gmail.com">Email</a>
           <a href="https://github.com/LandBasedFighter">GitHub</a>
           <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">LinkedIn</a>

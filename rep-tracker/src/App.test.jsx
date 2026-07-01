@@ -249,12 +249,14 @@ describe('App', () => {
               source: 'congress.gov',
               voterContext: {
                 contextNote: '',
+                contextSource: 'congress.gov bill summary',
                 headline: 'Veterans Health Care Improvement Act',
-                impact: 'Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.',
+                impact: 'This bill would expand care access for veterans and patients.',
                 issue: 'Healthcare',
                 kind: 'policy',
                 positionLabel: 'Voted Yea',
                 resultLabel: 'Passed',
+                sourceSummary: 'This bill would expand care access for veterans and patients.',
               },
             }],
           }),
@@ -285,10 +287,11 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
 
     expect(await screen.findByText('Veterans Health Care Improvement Act')).toBeInTheDocument()
-    expect(screen.getByText(/Healthcare votes can affect care access/)).toBeInTheDocument()
+    expect(screen.getByText(/This bill would expand care access for veterans and patients/)).toBeInTheDocument()
     expect(screen.getByText('Henry C. "Hank" Johnson Voted Yea')).toBeInTheDocument()
     expect(screen.getByText('Passed')).toBeInTheDocument()
-    expect(screen.getByText('Healthcare')).toBeInTheDocument()
+    expect(screen.getByText('Healthcare · Policy vote · Roll call 74 · HR 6329')).toBeInTheDocument()
+    expect(screen.queryByText('Policy vote')).not.toBeInTheDocument()
   })
 
   it('falls back for recent votes without voter context', async () => {
@@ -344,5 +347,6 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: 'Email' })).toHaveAttribute('href', 'mailto:moguinyard@gmail.com')
     expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
     expect(screen.getByRole('link', { name: 'LinkedIn' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')
+    expect(screen.getByRole('link', { name: 'Register to vote' })).toHaveAttribute('href', 'https://vote.gov')
   })
 })

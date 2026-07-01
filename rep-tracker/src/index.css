@@ -577,6 +577,13 @@ h3 {
   line-height: 1.32;
 }
 
+.vote-metadata-line {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .vote-kind {
   display: inline-flex;
   margin-bottom: 8px;
@@ -599,22 +606,7 @@ h3 {
 }
 
 .vote-card-contextual {
-  background:
-    linear-gradient(135deg, rgba(237, 233, 254, 0.45), rgba(255, 250, 243, 0.98)),
-    var(--surface-strong);
-}
-
-.vote-issue {
-  display: inline-flex;
-  margin: 0 0 8px 6px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  color: var(--accent-dark);
-  background: var(--accent-soft);
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  background: var(--surface-strong);
 }
 
 .vote-impact {
