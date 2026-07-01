@@ -351,13 +351,13 @@ describe('App', () => {
     expect(screen.getByText('Nay')).toBeInTheDocument()
   })
 
-  it('renders the site footer with Morgan Guinyard contact links', () => {
+  it('renders the site footer with lowercase Morgan Guinyard contact links', () => {
     render(<App />)
 
-    expect(screen.getByText('© 2026 Morgan Guinyard')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Email' })).toHaveAttribute('href', 'mailto:moguinyard@gmail.com')
-    expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
-    expect(screen.getByRole('link', { name: 'LinkedIn' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')
-    expect(screen.getByRole('link', { name: 'Register to vote' })).toHaveAttribute('href', 'https://vote.gov')
+    expect(screen.getByText('© 2026 morgan guinyard')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'email' })).toHaveAttribute('href', 'mailto:moguinyard@gmail.com')
+    expect(screen.getByRole('link', { name: 'github' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
+    expect(screen.getByRole('link', { name: 'linkedin' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')
+    expect(screen.getByRole('link', { name: 'register to vote' })).toHaveAttribute('href', 'https://vote.gov')
   })
 })
