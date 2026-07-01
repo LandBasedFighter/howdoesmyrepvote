@@ -722,6 +722,33 @@ h3 {
   background: rgba(255, 250, 243, 0.72);
 }
 
+.site-footer {
+  display: flex;
+  width: min(1120px, calc(100% - 32px));
+  margin: -28px auto 44px;
+  padding: 18px 8px 0;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.site-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.site-footer a {
+  color: var(--accent-dark);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.site-footer a:hover {
+  text-decoration: underline;
+}
+
 @keyframes pulse-dot {
   0%,
   100% {
@@ -800,6 +827,11 @@ h3 {
   .search-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .site-footer {
+    flex-direction: column;
+    margin-top: -24px;
   }
 }
 

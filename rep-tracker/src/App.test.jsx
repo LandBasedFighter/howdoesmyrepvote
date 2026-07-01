@@ -336,4 +336,13 @@ describe('App', () => {
     expect(screen.getByText('Substantive policy vote related to Example Act.')).toBeInTheDocument()
     expect(screen.getByText('Nay')).toBeInTheDocument()
   })
+
+  it('renders the site footer with Morgan Guinyard contact links', () => {
+    render(<App />)
+
+    expect(screen.getByText('© 2026 Morgan Guinyard')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Email' })).toHaveAttribute('href', 'mailto:moguinyard@gmail.com')
+    expect(screen.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
+    expect(screen.getByRole('link', { name: 'LinkedIn' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')
+  })
 })
