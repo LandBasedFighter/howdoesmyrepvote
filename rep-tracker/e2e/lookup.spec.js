@@ -42,12 +42,14 @@ const votesPayload = {
     source: 'congress.gov',
     voterContext: {
       contextNote: '',
+      contextSource: 'congress.gov bill summary',
       headline: 'Veterans Health Care Improvement Act',
-      impact: 'Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.',
+      impact: 'This bill would expand care access for veterans and patients.',
       issue: 'Healthcare',
       kind: 'policy',
       positionLabel: 'Voted Yea',
       resultLabel: 'Passed',
+      sourceSummary: 'This bill would expand care access for veterans and patients.',
     },
   }],
 }
@@ -187,7 +189,8 @@ test('recent votes render voter-facing context cards', async ({ page }) => {
   await page.getByRole('button', { name: 'Recent votes' }).first().click()
 
   await expect(page.getByText('Veterans Health Care Improvement Act')).toBeVisible()
-  await expect(page.getByText(/Healthcare votes can affect care access/)).toBeVisible()
+  await expect(page.getByText('This bill would expand care access for veterans and patients.')).toBeVisible()
+  await expect(page.getByText('Healthcare · Policy vote · Roll call 74 · HR 6329')).toBeVisible()
+  await expect(page.getByText(/Healthcare votes can affect/)).toHaveCount(0)
   await expect(page.getByText('Alexandria Ocasio-Cortez Voted Yea')).toBeVisible()
-  await expect(page.getByText('Healthcare').first()).toBeVisible()
 })
