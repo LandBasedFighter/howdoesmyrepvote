@@ -199,6 +199,71 @@ h3 {
   color: var(--accent-dark);
 }
 
+.issue-priority-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.issue-priority-panel h2 {
+  font-size: 1rem;
+}
+
+.issue-priority-panel p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.issue-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.issue-chip {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--surface);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.issue-chip.selected {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.issue-chip-more {
+  border-style: dashed;
+  color: var(--accent-dark);
+  background: transparent;
+}
+
+.selected-issues-note {
+  color: var(--accent-dark);
+  font-weight: 800;
+}
+
+.missing-issue-note {
+  margin-top: -2px;
+}
+
+.missing-issue-note a {
+  color: var(--accent-dark);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.missing-issue-note a:hover {
+  text-decoration: underline;
+}
+
 .search-row {
   display: flex;
   gap: 10px;
@@ -717,20 +782,47 @@ h3 {
 }
 
 .site-footer {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, auto);
   width: min(1120px, calc(100% - 32px));
   margin: -28px auto 44px;
   padding: 18px 8px 0;
-  justify-content: space-between;
   gap: 16px;
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.footer-brand,
+.footer-powered-by {
+  display: grid;
+  gap: 8px;
+}
+
+.footer-powered-by {
+  justify-items: end;
+  text-align: right;
+  color: color-mix(in srgb, var(--muted) 78%, white);
+  font-size: 0.76rem;
+}
+
+.footer-powered-by > span {
+  font-weight: 700;
 }
 
 .site-footer nav {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.footer-powered-by nav {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.footer-powered-by a {
+  color: color-mix(in srgb, var(--muted) 72%, var(--accent-dark));
+  font-weight: 700;
 }
 
 .site-footer a {
