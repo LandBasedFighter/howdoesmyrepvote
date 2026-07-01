@@ -17,6 +17,65 @@ describe('App', () => {
     expect(screen.getByText(/try a full address/i)).toBeInTheDocument()
   })
 
+  it('lets voters select issue priorities before searching', () => {
+    render(<App />)
+
+    expect(screen.getByText('choose what matters to you')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /healthcare/i })).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.click(screen.getByRole('button', { name: /healthcare/i }))
+    fireEvent.click(screen.getByRole('button', { name: /housing/i }))
+
+    expect(screen.getByRole('button', { name: /healthcare/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: /housing/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('your briefing will prioritize healthcare and housing & homeownership.')).toBeInTheDocument()
+  })
+
+  it('includes middle-of-the-road public safety and gun policy priorities', () => {
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: /crime & public safety/i })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: /second amendment & gun policy/i })).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.click(screen.getByRole('button', { name: /crime & public safety/i }))
+    fireEvent.click(screen.getByRole('button', { name: /second amendment & gun policy/i }))
+
+    expect(screen.getByText('your briefing will prioritize crime & public safety and second amendment & gun policy.')).toBeInTheDocument()
+  })
+
+  it('includes neutral hot-button policy priorities', () => {
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: /border security/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /more issues/i }))
+
+    expect(screen.getByRole('button', { name: /abortion & reproductive policy/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /election rules/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /free speech & online safety/i })).toBeInTheDocument()
+  })
+
+  it('shows six front-page issue pills and expands more issues on request', () => {
+    render(<App />)
+
+    expect(screen.getByRole('button', { name: /healthcare/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /housing/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /crime & public safety/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /second amendment & gun policy/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /border security/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /taxes & spending/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /education/i })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /more issues/i }))
+
+    expect(screen.getByRole('button', { name: /education/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /fewer issues/i })).toBeInTheDocument()
+    expect(screen.getByText('think an issue is missing?')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /suggest one/i })).toHaveAttribute(
+      'href',
+      'mailto:moguinyard@gmail.com?subject=Issue%20suggestion%20for%20How%20Did%20Your%20Rep%20Vote',
+    )
+  })
+
   it('surfaces local API connection failures', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     render(<App />)
@@ -374,6 +433,12 @@ describe('App', () => {
     render(<App />)
 
     expect(screen.getByText('© 2026 morgan guinyard')).toBeInTheDocument()
+    expect(screen.getByText('powered by:')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Congress.gov' })).toHaveAttribute('href', 'https://www.congress.gov')
+    expect(screen.getByRole('link', { name: 'Census Geocoder' })).toHaveAttribute('href', 'https://geocoding.geo.census.gov')
+    expect(screen.getByRole('link', { name: 'Senate.gov' })).toHaveAttribute('href', 'https://www.senate.gov')
+    expect(screen.getByRole('link', { name: 'Wikipedia' })).toHaveAttribute('href', 'https://www.wikipedia.org')
+    expect(screen.getByRole('link', { name: 'Google Gemini' })).toHaveAttribute('href', 'https://ai.google.dev')
     expect(screen.getByRole('link', { name: 'email' })).toHaveAttribute('href', 'mailto:moguinyard@gmail.com')
     expect(screen.getByRole('link', { name: 'github' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
     expect(screen.getByRole('link', { name: 'linkedin' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')

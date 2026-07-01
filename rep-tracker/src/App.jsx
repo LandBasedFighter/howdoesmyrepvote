@@ -23,6 +23,79 @@ const SEARCH_MODES = {
     helper: "Search by a current House member's name if you do not know their district.",
   },
 }
+const CIVIC_ISSUES = [
+  {
+    key: "Healthcare",
+    label: "healthcare",
+    description: "Care access, drug costs, hospitals, public health, and veterans care.",
+  },
+  {
+    key: "Housing & homeownership",
+    label: "housing",
+    description: "Rent, mortgages, housing supply, zoning, and homeownership costs.",
+  },
+  {
+    key: "Crime & public safety",
+    label: "crime & public safety",
+    description: "Policing, courts, sentencing, community safety, victims services, and crime prevention.",
+  },
+  {
+    key: "Second Amendment & gun policy",
+    label: "second amendment & gun policy",
+    description: "Gun rights, firearm rules, background checks, public safety, and lawful ownership.",
+  },
+  {
+    key: "Border security",
+    label: "border security",
+    description: "Border enforcement, ports of entry, asylum processing, fentanyl interdiction, and security operations.",
+  },
+  {
+    key: "Budget, taxes & government spending",
+    label: "taxes & spending",
+    description: "Federal spending, revenue, debt, agency funding, and household tax rules.",
+  },
+  {
+    key: "Immigration & border",
+    label: "immigration",
+    description: "Asylum, visas, enforcement, deportation policy, and border operations.",
+  },
+  {
+    key: "Abortion & reproductive policy",
+    label: "abortion & reproductive policy",
+    description: "Abortion rules, reproductive healthcare, pregnancy policy, and federal funding restrictions.",
+  },
+  {
+    key: "Election rules",
+    label: "election rules",
+    description: "Voting access, voter ID, election administration, campaign rules, and ballot security.",
+  },
+  {
+    key: "Free speech & online safety",
+    label: "free speech & online safety",
+    description: "Speech protections, platform rules, child online safety, censorship concerns, and digital privacy.",
+  },
+  {
+    key: "Energy, climate & utilities",
+    label: "energy & climate",
+    description: "Energy costs, emissions rules, public lands, and utility policy.",
+  },
+  {
+    key: "Education & student loans",
+    label: "education",
+    description: "Schools, colleges, student debt, and education access.",
+  },
+  {
+    key: "Defense, veterans & foreign policy",
+    label: "veterans & foreign policy",
+    description: "Service members, veterans, military action, overseas commitments, and national security spending.",
+  },
+  {
+    key: "Civil rights & social policy",
+    label: "civil rights",
+    description: "Privacy, discrimination rules, reproductive policy, and religious-liberty disputes.",
+  },
+]
+const FRONT_PAGE_ISSUE_COUNT = 6
 const STATE_NAMES = {
   AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
   CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
@@ -202,6 +275,18 @@ function voteMetadata(vote) {
     vote.rollCall ? `Roll call ${vote.rollCall}` : undefined,
     bill?.type && bill?.number ? `${bill.type} ${bill.number}` : undefined,
   ].filter(Boolean).join(" · ")
+}
+
+function issueLabel(issueKey) {
+  return (CIVIC_ISSUES.find(issue => issue.key === issueKey)?.key || issueKey).toLowerCase()
+}
+
+function formattedIssueSelection(issueKeys) {
+  const labels = issueKeys.map(issueLabel)
+  if (labels.length === 0) return ""
+  if (labels.length === 1) return labels[0]
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`
+  return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`
 }
 
 function issueExample(issue) {
@@ -500,6 +585,8 @@ function MemberCard({ member }) {
 function App() {
   const [searchMode, setSearchMode] = useState("address")
   const [searchText, setSearchText] = useState("")
+  const [selectedIssues, setSelectedIssues] = useState([])
+  const [showMoreIssues, setShowMoreIssues] = useState(false)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -508,6 +595,7 @@ function App() {
   const mode = SEARCH_MODES[searchMode]
   const districtMatches = searchMode === "district" ? districtSuggestions(searchText) : []
   const representativeMatches = searchMode === "representative" ? representativeSuggestions(searchText, representativeOptions) : []
+  const visibleIssues = showMoreIssues ? CIVIC_ISSUES : CIVIC_ISSUES.slice(0, FRONT_PAGE_ISSUE_COUNT)
 
   useEffect(() => {
     if (representativeOptions.length > 0) return
@@ -601,6 +689,14 @@ function App() {
     }
   }
 
+  function toggleIssue(issueKey) {
+    setSelectedIssues(current => (
+      current.includes(issueKey)
+        ? current.filter(selectedIssue => selectedIssue !== issueKey)
+        : [...current, issueKey]
+    ))
+  }
+
   return (
     <>
       <main className="app-shell">
@@ -665,6 +761,45 @@ function App() {
             </button>
           </div>
           <p className="helper-text">{mode.helper}</p>
+          <div className="issue-priority-panel" aria-label="Voter issue priorities">
+            <div>
+              <h2>choose what matters to you</h2>
+              <p>pick issues so the briefing can put the most relevant votes first.</p>
+            </div>
+            <div className="issue-chip-grid">
+              {visibleIssues.map(issue => (
+                <button
+                  key={issue.key}
+                  type="button"
+                  className={`issue-chip ${selectedIssues.includes(issue.key) ? "selected" : ""}`}
+                  aria-pressed={selectedIssues.includes(issue.key)}
+                  onClick={() => toggleIssue(issue.key)}
+                  title={issue.description}
+                >
+                  {issue.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="issue-chip issue-chip-more"
+                aria-expanded={showMoreIssues}
+                onClick={() => setShowMoreIssues(current => !current)}
+              >
+                {showMoreIssues ? "fewer issues" : "more issues"}
+              </button>
+            </div>
+            {selectedIssues.length > 0 && (
+              <p className="selected-issues-note">
+                your briefing will prioritize {formattedIssueSelection(selectedIssues)}.
+              </p>
+            )}
+            <p className="missing-issue-note">
+              <span>think an issue is missing?</span>{" "}
+              <a href="mailto:moguinyard@gmail.com?subject=Issue%20suggestion%20for%20How%20Did%20Your%20Rep%20Vote">
+                suggest one
+              </a>
+            </p>
+          </div>
         </div>
       </section>
 
@@ -700,13 +835,25 @@ function App() {
     </main>
 
       <footer className="site-footer">
-        <span>© 2026 morgan guinyard</span>
-        <nav aria-label="morgan guinyard links">
-          <a href="https://vote.gov">register to vote</a>
-          <a href="mailto:moguinyard@gmail.com">email</a>
-          <a href="https://github.com/LandBasedFighter">github</a>
-          <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">linkedin</a>
-        </nav>
+        <div className="footer-brand">
+          <span>© 2026 morgan guinyard</span>
+          <nav aria-label="morgan guinyard links">
+            <a href="https://vote.gov">register to vote</a>
+            <a href="mailto:moguinyard@gmail.com">email</a>
+            <a href="https://github.com/LandBasedFighter">github</a>
+            <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">linkedin</a>
+          </nav>
+        </div>
+        <div className="footer-powered-by">
+          <span>powered by:</span>
+          <nav aria-label="data services">
+            <a href="https://www.congress.gov">Congress.gov</a>
+            <a href="https://geocoding.geo.census.gov">Census Geocoder</a>
+            <a href="https://www.senate.gov">Senate.gov</a>
+            <a href="https://www.wikipedia.org">Wikipedia</a>
+            <a href="https://ai.google.dev">Google Gemini</a>
+          </nav>
+        </div>
       </footer>
     </>
   )
