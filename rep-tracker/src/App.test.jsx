@@ -233,4 +233,107 @@ describe('App', () => {
     expect(screen.getByText(/looks like a congressional district/i)).toBeInTheDocument()
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('renders voter-facing recent vote context when available', async () => {
+    const fetchMock = vi.fn(url => {
+      if (String(url).includes('/member/R000000/votes')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '6329', title: 'Veterans Health Care Improvement Act', type: 'HR' },
+              date: '2026-01-01T12:00:00-05:00',
+              description: 'Veterans Health Care Improvement Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '74',
+              source: 'congress.gov',
+              voterContext: {
+                contextNote: '',
+                headline: 'Veterans Health Care Improvement Act',
+                impact: 'Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.',
+                issue: 'Healthcare',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
+
+    expect(await screen.findByText('Veterans Health Care Improvement Act')).toBeInTheDocument()
+    expect(screen.getByText(/Healthcare votes can affect care access/)).toBeInTheDocument()
+    expect(screen.getByText('Henry C. "Hank" Johnson Voted Yea')).toBeInTheDocument()
+    expect(screen.getByText('Passed')).toBeInTheDocument()
+    expect(screen.getByText('Healthcare')).toBeInTheDocument()
+  })
+
+  it('falls back for recent votes without voter context', async () => {
+    const fetchMock = vi.fn(url => {
+      if (String(url).includes('/member/R000000/votes')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '2', title: 'Example Act', type: 'HR' },
+              date: '2026-01-02T12:00:00-05:00',
+              description: 'Example Act',
+              interpretation: { kind: 'policy', summary: 'Substantive policy vote related to Example Act.' },
+              position: 'Nay',
+              result: 'Failed',
+              rollCall: '75',
+            }],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
+
+    expect(await screen.findByText('Example Act')).toBeInTheDocument()
+    expect(screen.getByText('Substantive policy vote related to Example Act.')).toBeInTheDocument()
+    expect(screen.getByText('Nay')).toBeInTheDocument()
+  })
 })
