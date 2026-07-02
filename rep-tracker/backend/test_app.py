@@ -1314,3 +1314,8 @@ def test_votes_endpoint_briefing_context_allows_deeper_bounded_limit(monkeypatch
     assert len(data["votes"]) == 40
     assert len(data["votes"]) <= backend.MAX_ISSUE_BRIEFING_VOTES
     assert data["source"] == "test"
+
+
+def test_default_vote_scan_limits_cover_briefing_vote_depth():
+    assert backend.HOUSE_VOTE_SCAN_LIMIT >= backend.MAX_ISSUE_BRIEFING_VOTES
+    assert backend.SENATE_VOTE_SCAN_LIMIT >= backend.MAX_ISSUE_BRIEFING_VOTES

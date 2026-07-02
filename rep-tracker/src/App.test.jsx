@@ -549,6 +549,63 @@ describe('App', () => {
     expect(screen.getByText('recent roll-call snapshot, not a full career scorecard.')).toBeInTheDocument()
   })
 
+  it('matches selected issue chips to related backend issue buckets', async () => {
+    const fetchMock = vi.fn(url => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?context=briefing&limit=40')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '101', title: 'Border Operations Act', type: 'HR' },
+              date: '2026-01-03T12:00:00-05:00',
+              description: 'Border Operations Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '101',
+              voterContext: {
+                headline: 'Border Operations Act',
+                impact: 'This bill affects border operations and immigration enforcement.',
+                issue: 'Immigration & border',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^border security$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('your issue briefing')).toBeInTheDocument()
+    expect(screen.getByText('1 matching recent vote')).toBeInTheDocument()
+    expect(screen.getByText('Border Operations Act')).toBeInTheDocument()
+  })
+
   it('shows a soft empty state when an issue has no exact recent vote match', async () => {
     const fetchMock = vi.fn(url => {
       const urlText = String(url)

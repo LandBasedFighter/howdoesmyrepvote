@@ -22,7 +22,7 @@ GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
 MAX_ISSUE_BRIEFING_VOTES = int(os.getenv("MAX_ISSUE_BRIEFING_VOTES", "40"))
-HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "30"))
+HOUSE_VOTE_SCAN_LIMIT = max(int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "40")), MAX_ISSUE_BRIEFING_VOTES)
 HOUSE_VOTE_WORKERS = int(os.getenv("HOUSE_VOTE_WORKERS", "6"))
 MEMBER_LOOKUP_WORKERS = int(os.getenv("MEMBER_LOOKUP_WORKERS", "12"))
 HOUSE_VOTE_SESSIONS = [
@@ -31,7 +31,7 @@ HOUSE_VOTE_SESSIONS = [
     if session.strip()
 ]
 SENATE_BASE_URL = "https://www.senate.gov/legislative/LIS"
-SENATE_VOTE_SCAN_LIMIT = int(os.getenv("SENATE_VOTE_SCAN_LIMIT", "30"))
+SENATE_VOTE_SCAN_LIMIT = max(int(os.getenv("SENATE_VOTE_SCAN_LIMIT", "40")), MAX_ISSUE_BRIEFING_VOTES)
 SENATE_VOTE_WORKERS = int(os.getenv("SENATE_VOTE_WORKERS", "8"))
 SENATE_VOTE_SESSIONS = [
     tuple(int(part) for part in session.strip().split(":", 1))

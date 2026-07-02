@@ -97,6 +97,14 @@ const CIVIC_ISSUES = [
   },
 ]
 const FRONT_PAGE_ISSUE_COUNT = 6
+const ISSUE_MATCH_ALIASES = {
+  "Abortion & reproductive policy": ["Civil rights & social policy"],
+  "Border security": ["Immigration & border"],
+  "Crime & public safety": ["Civil rights & social policy"],
+  "Election rules": ["Civil rights & social policy"],
+  "Free speech & online safety": ["Civil rights & social policy"],
+  "Second Amendment & gun policy": ["Civil rights & social policy"],
+}
 const STATE_NAMES = {
   AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
   CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
@@ -337,13 +345,19 @@ function compareBriefingVotes(left, right) {
   return rightScore[2].localeCompare(leftScore[2])
 }
 
+function issueMatchKeys(issueKey) {
+  return [issueKey, ...(ISSUE_MATCH_ALIASES[issueKey] || [])]
+    .map(issue => String(issue || "").trim().toLowerCase())
+    .filter(Boolean)
+}
+
 function buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials) {
   return selectedIssues.map(issueKey => {
-    const normalizedIssueKey = String(issueKey || "").trim().toLowerCase()
+    const matchKeys = new Set(issueMatchKeys(issueKey))
     const matches = officials.flatMap(official => {
       const votes = issueVotesByMember[official.bioguideId] || []
       return votes
-        .filter(vote => String(voteIssue(vote) || "").trim().toLowerCase() === normalizedIssueKey)
+        .filter(vote => matchKeys.has(String(voteIssue(vote) || "").trim().toLowerCase()))
         .map(vote => ({ vote, official }))
     }).sort(compareBriefingVotes)
 
