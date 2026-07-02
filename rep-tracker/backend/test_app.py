@@ -822,6 +822,28 @@ def test_voter_context_explains_healthcare_policy_vote():
     }
 
 
+def test_voter_context_classifies_voter_facing_issue_chips():
+    cases = [
+        ("Concealed Carry Reciprocity Act", "Second Amendment & gun policy"),
+        ("Police Funding Act", "Crime & public safety"),
+        ("American Confidence in Elections Act", "Election rules"),
+        ("Kids Online Safety Act", "Free speech & online safety"),
+        ("Protecting Access to Reproductive Care Act", "Abortion & reproductive policy"),
+    ]
+
+    for title, issue in cases:
+      context = backend.voter_context({
+          "bill": {"title": title, "type": "HR", "number": "1"},
+          "description": title,
+          "position": "Yea",
+          "question": "On Passage",
+          "result": "Passed",
+      })
+
+      assert context["issue"] == issue
+      assert context["impact"] == backend.IMPACT_TEMPLATES[issue]
+
+
 def test_voter_context_explains_procedural_votes_without_overclaiming():
     vote = {
         "bill": {"title": "Providing for consideration of H.R. 6329", "type": "HRES", "number": "1075"},

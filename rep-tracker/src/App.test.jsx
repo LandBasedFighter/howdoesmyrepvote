@@ -606,6 +606,63 @@ describe('App', () => {
     expect(screen.getByText('Border Operations Act')).toBeInTheDocument()
   })
 
+  it('does not match unrelated civil rights votes to specific issue chips', async () => {
+    const fetchMock = vi.fn(url => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?context=briefing&limit=40')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '102', title: 'Privacy Rights Act', type: 'HR' },
+              date: '2026-01-03T12:00:00-05:00',
+              description: 'Privacy Rights Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '102',
+              voterContext: {
+                headline: 'Privacy Rights Act',
+                impact: 'This bill affects privacy rules.',
+                issue: 'Civil rights & social policy',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^second amendment & gun policy$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('your issue briefing')).toBeInTheDocument()
+    expect(screen.getByText('0 matching recent votes')).toBeInTheDocument()
+    expect(screen.queryByText('Privacy Rights Act')).not.toBeInTheDocument()
+  })
+
   it('shows a soft empty state when an issue has no exact recent vote match', async () => {
     const fetchMock = vi.fn(url => {
       const urlText = String(url)

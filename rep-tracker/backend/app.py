@@ -427,6 +427,22 @@ ISSUE_TAXONOMY = {
     "Cost of living & consumer rules": (
         "affordability", "consumer", "credit", "fee", "price", "cost", "home appliance", "appliance",
     ),
+    "Second Amendment & gun policy": (
+        "second amendment", "gun", "firearm", "concealed carry", "ammunition", "background check",
+    ),
+    "Crime & public safety": (
+        "crime", "police", "policing", "law enforcement", "public safety", "sentencing", "victim",
+    ),
+    "Election rules": (
+        "election", "voting", "voter", "ballot", "campaign finance", "polling place",
+    ),
+    "Free speech & online safety": (
+        "free speech", "speech", "online safety", "censorship", "platform", "kids online safety",
+        "child online",
+    ),
+    "Abortion & reproductive policy": (
+        "abortion", "reproductive", "pregnancy", "reproductive care",
+    ),
     "Energy, climate & utilities": (
         "energy", "environment", "environmental", "emission", "climate", "utility", "pipeline", "public lands",
         "clean air act", "epa", "environmental protection agency",
@@ -549,6 +565,11 @@ IMPACT_TEMPLATES = {
     "Energy, climate & utilities": "Energy and climate votes can affect household energy costs, emissions rules, public lands, or utility policy.",
     "Federal agency rules & oversight": "Agency oversight votes can affect consumer protections, regulation, agency authority, or how Congress reviews federal rules.",
     "Cost of living & consumer rules": "Consumer-rule votes can affect prices, fees, credit, household costs, or protections for buyers and borrowers.",
+    "Second Amendment & gun policy": "Gun policy votes can affect firearm rules, lawful ownership, background checks, public safety, or enforcement.",
+    "Crime & public safety": "Public safety votes can affect policing, courts, sentencing, victims services, crime prevention, or community safety programs.",
+    "Election rules": "Election-rule votes can affect voting access, ballot rules, voter identification, election administration, or campaign rules.",
+    "Free speech & online safety": "Speech and online-safety votes can affect expression, platform rules, child safety, censorship concerns, or digital privacy.",
+    "Abortion & reproductive policy": "Abortion and reproductive-policy votes can affect abortion rules, reproductive healthcare, pregnancy policy, or federal funding restrictions.",
     "Civil rights & social policy": "Civil rights and social policy votes can affect privacy, discrimination rules, reproductive policy, or religious-liberty disputes.",
     "Federal courts & nominations": "Nomination votes can affect who interprets federal law and how courts or agencies apply policy over time.",
 }

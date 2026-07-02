@@ -98,12 +98,7 @@ const CIVIC_ISSUES = [
 ]
 const FRONT_PAGE_ISSUE_COUNT = 6
 const ISSUE_MATCH_ALIASES = {
-  "Abortion & reproductive policy": ["Civil rights & social policy"],
   "Border security": ["Immigration & border"],
-  "Crime & public safety": ["Civil rights & social policy"],
-  "Election rules": ["Civil rights & social policy"],
-  "Free speech & online safety": ["Civil rights & social policy"],
-  "Second Amendment & gun policy": ["Civil rights & social policy"],
 }
 const STATE_NAMES = {
   AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
