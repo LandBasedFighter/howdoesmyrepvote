@@ -629,6 +629,167 @@ describe('App', () => {
     })
   })
 
+  it('starting a second lookup does not show the first lookup briefing while next briefing loads', async () => {
+    let resolveSecondBriefing
+    const secondBriefingPromise = new Promise(resolve => {
+      resolveSecondBriefing = resolve
+    })
+    const fetchMock = vi.fn((url, options) => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000001/votes?context=briefing&limit=40')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '10', title: 'First District Healthcare Act', type: 'HR' },
+              date: '2026-01-03T12:00:00-05:00',
+              description: 'First District Healthcare Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '10',
+              voterContext: {
+                headline: 'First District Healthcare Act',
+                impact: 'First district impact.',
+                issue: 'Healthcare',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      if (urlText.includes('/member/R000002/votes?context=briefing&limit=40')) {
+        return secondBriefingPromise
+      }
+      if (urlText.endsWith('/reps') && options?.method === 'POST') {
+        const body = JSON.parse(options.body)
+        if (body.address.includes('10001')) {
+          return Promise.resolve({
+            json: () => Promise.resolve({
+              state: 'NY',
+              district: '12',
+              districtLabel: 'NY-12',
+              representative: {
+                bioguideId: 'R000001',
+                name: 'One, Member',
+                partyName: 'Democratic',
+                terms: { item: [{ chamber: 'House of Representatives' }] },
+              },
+              senators: [],
+            }),
+          })
+        }
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            state: 'GA',
+            district: '4',
+            districtLabel: 'GA-4',
+            representative: {
+              bioguideId: 'R000002',
+              name: 'Two, Member',
+              partyName: 'Democratic',
+              terms: { item: [{ chamber: 'House of Representatives' }] },
+            },
+            senators: [],
+          }),
+        })
+      }
+      return Promise.resolve({ json: () => Promise.resolve({ votes: [] }) })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^healthcare$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '350 5th Ave New York, NY 10001' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('First District Healthcare Act')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('Member Two')).toBeInTheDocument()
+    expect(screen.queryByText('First District Healthcare Act')).not.toBeInTheDocument()
+
+    resolveSecondBriefing({
+      json: () => Promise.resolve({ votes: [] }),
+    })
+
+    expect(await screen.findByText('no exact recent vote found yet. try policy profile for broader signals.')).toBeInTheDocument()
+  })
+
+  it('keeps successful issue matches when one official briefing request fails', async () => {
+    const fetchMock = vi.fn(url => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?context=briefing&limit=40')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '6329', title: 'Veterans Health Care Improvement Act', type: 'HR' },
+              date: '2026-01-03T12:00:00-05:00',
+              description: 'Veterans Health Care Improvement Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '74',
+              voterContext: {
+                headline: 'Veterans Health Care Improvement Act',
+                impact: 'This bill would expand care access for veterans and patients.',
+                issue: 'Healthcare',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      if (urlText.includes('/member/S000001/votes?context=briefing&limit=40')) {
+        return Promise.reject(new Error('timeout'))
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [{
+            bioguideId: 'S000001',
+            name: 'Warnock, Raphael G.',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'Senate' }] },
+          }],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^healthcare$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('Veterans Health Care Improvement Act')).toBeInTheDocument()
+    expect(screen.getByText('1 matching recent vote')).toBeInTheDocument()
+    expect(screen.getByText('some officials could not be loaded for this briefing.')).toBeInTheDocument()
+  })
+
   it('renders the site footer with lowercase Morgan Guinyard contact links', () => {
     render(<App />)
 

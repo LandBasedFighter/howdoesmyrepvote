@@ -361,6 +361,10 @@ function matchCountLabel(count) {
   return `${count} matching recent votes`
 }
 
+function briefingRequestKey(officials) {
+  return officials.map(official => official.bioguideId).join("|")
+}
+
 function issueExample(issue) {
   const vote = issue.evidence?.[0]
   if (!vote) return ""
@@ -486,8 +490,9 @@ function VoteCard({ vote, displayName, selectedIssues }) {
   )
 }
 
-function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading, error }) {
+function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading, error, requestKey, dataKey }) {
   if (!selectedIssues.length || !officials.length) return null
+  if (dataKey !== requestKey) return null
   if (loading && Object.keys(issueVotesByMember).length === 0) return null
 
   const cards = buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials)
@@ -720,6 +725,7 @@ function App() {
   const [issueVotesByMember, setIssueVotesByMember] = useState({})
   const [issueBriefingLoading, setIssueBriefingLoading] = useState(false)
   const [issueBriefingError, setIssueBriefingError] = useState("")
+  const [issueBriefingDataKey, setIssueBriefingDataKey] = useState("")
   const [representativeOptions, setRepresentativeOptions] = useState([])
   const lookupSectionRef = useRef(null)
   const mode = SEARCH_MODES[searchMode]
@@ -727,6 +733,7 @@ function App() {
   const representativeMatches = searchMode === "representative" ? representativeSuggestions(searchText, representativeOptions) : []
   const visibleIssues = showMoreIssues ? CIVIC_ISSUES : CIVIC_ISSUES.slice(0, FRONT_PAGE_ISSUE_COUNT)
   const officials = allOfficials(data)
+  const issueBriefingRequestKey = briefingRequestKey(officials)
 
   useEffect(() => {
     if (representativeOptions.length > 0) return
@@ -752,8 +759,11 @@ function App() {
 
   useEffect(() => {
     const currentOfficials = allOfficials(data)
+    const currentRequestKey = briefingRequestKey(currentOfficials)
+    setIssueVotesByMember({})
+    setIssueBriefingDataKey("")
+
     if (!selectedIssues.length || !currentOfficials.length) {
-      setIssueVotesByMember({})
       setIssueBriefingError("")
       setIssueBriefingLoading(false)
       return
@@ -764,18 +774,31 @@ function App() {
       setIssueBriefingLoading(true)
       setIssueBriefingError("")
       try {
-        const entries = await Promise.all(currentOfficials.map(async official => {
+        const results = await Promise.allSettled(currentOfficials.map(async official => {
           const res = await fetch(`${API_BASE_URL}/member/${official.bioguideId}/votes?context=briefing&limit=${ISSUE_BRIEFING_VOTE_LIMIT}`)
           const json = await res.json()
           if (json.error) throw new Error(json.error)
           return [official.bioguideId, json.votes || []]
         }))
         if (!cancelled) {
-          setIssueVotesByMember(Object.fromEntries(entries))
+          const successfulEntries = results
+            .filter(result => result.status === "fulfilled")
+            .map(result => result.value)
+          const failedCount = results.length - successfulEntries.length
+          setIssueVotesByMember(Object.fromEntries(successfulEntries))
+          setIssueBriefingDataKey(currentRequestKey)
+          if (failedCount > 0) {
+            setIssueBriefingError(
+              successfulEntries.length
+                ? "some officials could not be loaded for this briefing."
+                : "could not load the issue briefing from the local api."
+            )
+          }
         }
       } catch {
         if (!cancelled) {
           setIssueVotesByMember({})
+          setIssueBriefingDataKey(currentRequestKey)
           setIssueBriefingError("could not load the issue briefing from the local api.")
         }
       } finally {
@@ -993,6 +1016,8 @@ function App() {
               issueVotesByMember={issueVotesByMember}
               loading={issueBriefingLoading}
               error={issueBriefingError}
+              requestKey={issueBriefingRequestKey}
+              dataKey={issueBriefingDataKey}
             />
 
             <div className="member-grid">
