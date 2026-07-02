@@ -428,7 +428,8 @@ ISSUE_TAXONOMY = {
         "affordability", "consumer", "credit", "fee", "price", "cost", "home appliance", "appliance",
     ),
     "Energy, climate & utilities": (
-        "energy", "environment", "emission", "climate", "utility", "pipeline", "public lands",
+        "energy", "environment", "environmental", "emission", "climate", "utility", "pipeline", "public lands",
+        "clean air act", "epa", "environmental protection agency",
     ),
     "Healthcare": ("health", "medicaid", "medicare", "drug", "hospital", "veterans health", "care"),
     "Defense, veterans & foreign policy": (
@@ -478,8 +479,8 @@ def vote_text(vote):
     ).lower()
 
 
-def classify_issue(vote):
-    text = vote_text(vote)
+def classify_issue(vote, context_text=None):
+    text = " ".join(part for part in [vote_text(vote), str(context_text or "")] if part).lower()
     bill = vote.get("bill") or {}
     bill_type = str(bill.get("type") or "").lower()
     if bill_type in {"pn", "nomination"} or "confirmation:" in text:
@@ -520,18 +521,18 @@ def vote_kind(vote):
     return "policy" if (vote.get("bill") or {}).get("title") else "procedural"
 
 
-def interpret_vote(vote):
+def interpret_vote(vote, context_text=None):
     kind = vote_kind(vote)
     bill = vote.get("bill") or {}
     title = vote.get("description") or bill.get("title") or vote.get("question")
     if kind == "procedural":
         summary = "Procedural vote that shaped debate, timing, or floor handling rather than directly deciding policy."
     else:
-        issue = classify_issue(vote)
+        issue = classify_issue(vote, context_text)
         issue_text = "policy" if issue == "Other recent policy" else issue.lower()
         summary = f"Substantive {issue_text} vote related to {title}."
     return {
-        "issue": classify_issue(vote) if kind == "policy" else "Procedure",
+        "issue": classify_issue(vote, context_text) if kind == "policy" else "Procedure",
         "kind": kind,
         "priority": 0 if kind == "policy" else 1,
         "summary": summary,
@@ -573,8 +574,8 @@ def vote_result_label(result):
     return value if value else "Result unavailable"
 
 
-def voter_context(vote):
-    interpretation = interpret_vote(vote)
+def voter_context(vote, context_text=None, interpretation=None):
+    interpretation = interpretation or interpret_vote(vote, context_text)
     kind = interpretation["kind"]
     issue = interpretation["issue"]
     headline = clean_vote_headline(vote)
@@ -602,18 +603,33 @@ def voter_context(vote):
     }
 
 
+def contextual_policy_impact(context, summary_text):
+    if context.get("kind") != "policy" or not summary_text:
+        return context.get("impact")
+    template = IMPACT_TEMPLATES.get(context.get("issue"))
+    if not template:
+        return summary_text
+    return f"{template} {summary_text}"
+
+
 def enrich_vote(vote, bill_context_data=None):
-    context = voter_context(vote)
+    context_text = None
+    if bill_context_data:
+        context_text = " ".join(
+            part for part in [bill_context_data.get("summary"), bill_context_data.get("sourceSummary")] if part
+        )
+    interpretation = interpret_vote(vote, context_text)
+    context = voter_context(vote, context_text, interpretation=interpretation)
     if bill_context_data:
         context = {
             **context,
-            "impact": bill_context_data["summary"],
+            "impact": contextual_policy_impact(context, bill_context_data["summary"]),
             "sourceSummary": bill_context_data["sourceSummary"],
             "contextSource": bill_context_data["contextSource"],
         }
     return {
         **vote,
-        "interpretation": interpret_vote(vote),
+        "interpretation": interpretation,
         "voterContext": context,
     }
 
@@ -703,6 +719,10 @@ def plain_english_bill_context(text, limit=220):
     cleaned = plain_text_summary(text, limit=1000)
     if not cleaned:
         return None
+    acronym_lead_in = re.search(r"\bor the [A-Za-z0-9'\-\s]+? Act\b", cleaned, flags=re.IGNORECASE)
+    summary_start = re.search(r"\b(This (bill|resolution|measure)|The bill)\b", cleaned)
+    if acronym_lead_in and summary_start and summary_start.start() > acronym_lead_in.end():
+        cleaned = cleaned[summary_start.start():].strip()
     for pattern, replacement in JARGON_REPLACEMENTS:
         cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
     first_sentence = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0].strip()

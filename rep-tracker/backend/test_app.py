@@ -865,6 +865,17 @@ def test_plain_english_bill_context_cleans_jargon_and_html():
     )
 
 
+def test_plain_english_bill_context_removes_acronym_expansion_lead_in():
+    text = (
+        "Reducing and Eliminating Duplicative Environmental Regulations Act or the RED Tape Act "
+        "This bill removes the requirement under the Clean Air Act that the Environmental Protection Agency review newly proposed regulations."
+    )
+
+    assert backend.plain_english_bill_context(text) == (
+        "This bill removes the requirement under the Clean Air Act that the Environmental Protection Agency review newly proposed regulations."
+    )
+
+
 def test_bill_context_uses_congress_summary(monkeypatch):
     calls = []
 
@@ -936,11 +947,40 @@ def test_enrich_vote_uses_bill_context_for_voter_impact():
     })
 
     assert enriched["voterContext"]["impact"] == (
+        "Defense and foreign policy votes can affect service members, veterans, military action, overseas commitments, or national security spending. "
         "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them."
     )
     assert enriched["voterContext"]["contextSource"] == "congress.gov bill summary"
     assert enriched["voterContext"]["sourceSummary"] == (
         "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them."
+    )
+
+
+def test_enrich_vote_uses_bill_summary_to_classify_environmental_regulation():
+    vote = {
+        "bill": {"number": "6398", "title": "RED Tape Act", "type": "HR"},
+        "congress": 119,
+        "description": "RED Tape Act",
+        "position": "Nay",
+        "question": "On Passage",
+        "result": "Passed",
+        "rollCall": "118",
+    }
+
+    enriched = backend.enrich_vote(vote, {
+        "contextSource": "congress.gov bill summary",
+        "sourceSummary": "This bill removes the requirement under the Clean Air Act that the Environmental Protection Agency review newly proposed regulations.",
+        "summary": "This bill removes a Clean Air Act requirement for EPA review of newly proposed regulations.",
+    })
+
+    assert enriched["interpretation"]["issue"] == "Energy, climate & utilities"
+    assert enriched["voterContext"]["issue"] == "Energy, climate & utilities"
+    assert enriched["voterContext"]["impact"] == (
+        "Energy and climate votes can affect household energy costs, emissions rules, public lands, or utility policy. "
+        "This bill removes a Clean Air Act requirement for EPA review of newly proposed regulations."
+    )
+    assert enriched["voterContext"]["sourceSummary"] == (
+        "This bill removes the requirement under the Clean Air Act that the Environmental Protection Agency review newly proposed regulations."
     )
 
 
