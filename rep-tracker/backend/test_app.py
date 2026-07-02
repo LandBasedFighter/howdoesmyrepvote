@@ -1216,3 +1216,61 @@ def test_legislation_endpoint_returns_upstream_status_and_message(monkeypatch):
         "error": "API_KEY_INVALID: An invalid api_key was supplied.",
         "statusCode": 403,
     }
+
+
+def test_votes_endpoint_default_limit_stays_readable(monkeypatch):
+    votes = [
+        {
+            "bill": {"title": f"Healthcare Vote {index}", "type": "HR", "number": str(index)},
+            "date": f"2026-01-{index:02d}",
+            "description": f"Healthcare Vote {index}",
+            "position": "Yea",
+            "question": "On Passage",
+            "result": "Passed",
+            "rollCall": str(index),
+        }
+        for index in range(1, 31)
+    ]
+
+    monkeypatch.setattr(backend, "member_vote_pool", lambda bioguide_id: {
+        "votes": votes,
+        "source": "test",
+    })
+
+    client = backend.app.test_client()
+    response = client.get("/member/R000000/votes?limit=40")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert len(data["votes"]) == backend.MAX_VOTES
+    assert data["source"] == "test"
+
+
+def test_votes_endpoint_briefing_context_allows_deeper_bounded_limit(monkeypatch):
+    votes = [
+        {
+            "bill": {"title": f"Healthcare Vote {index}", "type": "HR", "number": str(index)},
+            "date": f"2026-01-{index:02d}",
+            "description": f"Healthcare Vote {index}",
+            "position": "Yea",
+            "question": "On Passage",
+            "result": "Passed",
+            "rollCall": str(index),
+        }
+        for index in range(1, 46)
+    ]
+
+    monkeypatch.setattr(backend, "member_vote_pool", lambda bioguide_id: {
+        "votes": votes,
+        "source": "test",
+    })
+    monkeypatch.setattr(backend, "enrich_votes_with_bill_context", lambda selected_votes: selected_votes)
+
+    client = backend.app.test_client()
+    response = client.get("/member/R000000/votes?context=briefing&limit=40")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert len(data["votes"]) == 40
+    assert len(data["votes"]) <= backend.MAX_ISSUE_BRIEFING_VOTES
+    assert data["source"] == "test"

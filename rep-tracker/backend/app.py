@@ -21,6 +21,7 @@ REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
 GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
+MAX_ISSUE_BRIEFING_VOTES = int(os.getenv("MAX_ISSUE_BRIEFING_VOTES", "40"))
 HOUSE_VOTE_SCAN_LIMIT = int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "30"))
 HOUSE_VOTE_WORKERS = int(os.getenv("HOUSE_VOTE_WORKERS", "6"))
 MEMBER_LOOKUP_WORKERS = int(os.getenv("MEMBER_LOOKUP_WORKERS", "12"))
@@ -1689,7 +1690,9 @@ def get_member_legislation(bioguide_id):
 
 @app.route("/member/<bioguide_id>/votes")
 def get_member_votes(bioguide_id):
-    limit = get_int_arg("limit", MAX_VOTES, 1, 25)
+    context = str(request.args.get("context", "")).strip().lower()
+    maximum = MAX_ISSUE_BRIEFING_VOTES if context == "briefing" else MAX_VOTES
+    limit = get_int_arg("limit", MAX_VOTES, 1, maximum)
 
     def fetch_votes():
         pool = member_vote_pool(bioguide_id)
@@ -1701,7 +1704,7 @@ def get_member_votes(bioguide_id):
             "source": pool.get("source"),
         }
 
-    data = cached(("votes", bioguide_id, limit), fetch_votes)
+    data = cached(("votes", bioguide_id, context or "default", limit), fetch_votes)
     status = data.get("statusCode", 502) if data.get("error") else 200
     return jsonify(data), status
 
