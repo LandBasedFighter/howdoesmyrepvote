@@ -932,13 +932,13 @@ h3 {
   font-weight: 500;
 }
 
-.site-footer a {
+.footer-link-group a {
   color: color-mix(in srgb, var(--muted) 72%, var(--accent-dark));
   font-weight: 600;
   text-decoration: none;
 }
 
-.site-footer a:hover {
+.footer-link-group a:hover {
   color: var(--accent-dark);
   text-decoration: underline;
 }
