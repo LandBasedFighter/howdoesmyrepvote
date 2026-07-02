@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 
 const ITEMS_PER_PAGE = 5
+const ISSUE_BRIEFING_VOTE_LIMIT = 40
 const DEFAULT_API_HOST = typeof window === "undefined" ? "localhost" : window.location.hostname || "localhost"
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${DEFAULT_API_HOST}:5000`
 const SEARCH_MODES = {
@@ -309,6 +310,57 @@ function formattedIssueSelection(issueKeys) {
   return `${labels.slice(0, -1).join(", ")}, and ${labels[labels.length - 1]}`
 }
 
+function allOfficials(data) {
+  if (!data) return []
+  return [data.representative, ...(data.senators || [])].filter(Boolean)
+}
+
+function officialDisplayName(official) {
+  return formatMemberName(official.name)
+}
+
+function voteUsefulnessScore(vote) {
+  const kind = vote.voterContext?.kind || vote.interpretation?.kind
+  const hasContext = Boolean(vote.voterContext?.impact || vote.interpretation?.summary)
+  return [
+    kind === "policy" ? 0 : 1,
+    hasContext ? 0 : 1,
+    String(vote.date || ""),
+  ]
+}
+
+function compareBriefingVotes(left, right) {
+  const leftScore = voteUsefulnessScore(left.vote)
+  const rightScore = voteUsefulnessScore(right.vote)
+  if (leftScore[0] !== rightScore[0]) return leftScore[0] - rightScore[0]
+  if (leftScore[1] !== rightScore[1]) return leftScore[1] - rightScore[1]
+  return rightScore[2].localeCompare(leftScore[2])
+}
+
+function buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials) {
+  return selectedIssues.map(issueKey => {
+    const normalizedIssueKey = String(issueKey || "").trim().toLowerCase()
+    const matches = officials.flatMap(official => {
+      const votes = issueVotesByMember[official.bioguideId] || []
+      return votes
+        .filter(vote => String(voteIssue(vote) || "").trim().toLowerCase() === normalizedIssueKey)
+        .map(vote => ({ vote, official }))
+    }).sort(compareBriefingVotes)
+
+    return {
+      issueKey,
+      label: issueLabel(issueKey),
+      matches,
+      topMatch: matches[0],
+    }
+  })
+}
+
+function matchCountLabel(count) {
+  if (count === 1) return "1 matching recent vote"
+  return `${count} matching recent votes`
+}
+
 function issueExample(issue) {
   const vote = issue.evidence?.[0]
   if (!vote) return ""
@@ -431,6 +483,59 @@ function VoteCard({ vote, displayName, selectedIssues }) {
         {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
       </div>
     </li>
+  )
+}
+
+function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading, error }) {
+  if (!selectedIssues.length || !officials.length) return null
+  if (loading && Object.keys(issueVotesByMember).length === 0) return null
+
+  const cards = buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials)
+
+  return (
+    <section className="issue-briefing" aria-label="your issue briefing">
+      <div className="issue-briefing-header">
+        <div>
+          <h2>your issue briefing</h2>
+          <p>recent roll-call snapshot, not a full career scorecard.</p>
+        </div>
+        {loading && <span className="issue-briefing-status">checking recent votes</span>}
+      </div>
+      {error && <p className="inline-error">{error}</p>}
+      <div className="issue-briefing-grid">
+        {cards.map(card => {
+          const topMatch = card.topMatch
+          const vote = topMatch?.vote
+          const official = topMatch?.official
+          const headline = vote?.voterContext?.headline || vote?.description || "Vote details unavailable"
+          const impact = vote?.voterContext?.impact || vote?.interpretation?.summary
+
+          return (
+            <article key={card.issueKey} className="issue-briefing-card">
+              <div className="issue-briefing-card-header">
+                <h3>{card.label}</h3>
+                <span>{matchCountLabel(card.matches.length)}</span>
+              </div>
+              {topMatch ? (
+                <>
+                  <div className="detail-title">{headline}</div>
+                  {impact && <p className="vote-impact">{impact}</p>}
+                  <div className="vote-row vote-row-prominent">
+                    <span className="vote-position">{displayVotePosition(officialDisplayName(official), vote)}</span>
+                    {vote.result && <span>{vote.voterContext?.resultLabel || vote.result}</span>}
+                  </div>
+                  <div className="detail-meta">
+                    {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
+                  </div>
+                </>
+              ) : (
+                <p className="issue-briefing-empty">no exact recent vote found yet. try policy profile for broader signals.</p>
+              )}
+            </article>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 
@@ -612,12 +717,16 @@ function App() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  const [issueVotesByMember, setIssueVotesByMember] = useState({})
+  const [issueBriefingLoading, setIssueBriefingLoading] = useState(false)
+  const [issueBriefingError, setIssueBriefingError] = useState("")
   const [representativeOptions, setRepresentativeOptions] = useState([])
   const lookupSectionRef = useRef(null)
   const mode = SEARCH_MODES[searchMode]
   const districtMatches = searchMode === "district" ? districtSuggestions(searchText) : []
   const representativeMatches = searchMode === "representative" ? representativeSuggestions(searchText, representativeOptions) : []
   const visibleIssues = showMoreIssues ? CIVIC_ISSUES : CIVIC_ISSUES.slice(0, FRONT_PAGE_ISSUE_COUNT)
+  const officials = allOfficials(data)
 
   useEffect(() => {
     if (representativeOptions.length > 0) return
@@ -640,6 +749,46 @@ function App() {
       cancelled = true
     }
   }, [representativeOptions.length])
+
+  useEffect(() => {
+    const currentOfficials = allOfficials(data)
+    if (!selectedIssues.length || !currentOfficials.length) {
+      setIssueVotesByMember({})
+      setIssueBriefingError("")
+      setIssueBriefingLoading(false)
+      return
+    }
+
+    let cancelled = false
+    async function loadIssueBriefingVotes() {
+      setIssueBriefingLoading(true)
+      setIssueBriefingError("")
+      try {
+        const entries = await Promise.all(currentOfficials.map(async official => {
+          const res = await fetch(`${API_BASE_URL}/member/${official.bioguideId}/votes?context=briefing&limit=${ISSUE_BRIEFING_VOTE_LIMIT}`)
+          const json = await res.json()
+          if (json.error) throw new Error(json.error)
+          return [official.bioguideId, json.votes || []]
+        }))
+        if (!cancelled) {
+          setIssueVotesByMember(Object.fromEntries(entries))
+        }
+      } catch {
+        if (!cancelled) {
+          setIssueVotesByMember({})
+          setIssueBriefingError("could not load the issue briefing from the local api.")
+        }
+      } finally {
+        if (!cancelled) setIssueBriefingLoading(false)
+      }
+    }
+
+    loadIssueBriefingVotes()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedIssues, data])
 
   useEffect(() => {
     if (!loading && !data) return
@@ -837,6 +986,14 @@ function App() {
                 {data.districtDescription && <p className="district-description">{data.districtDescription}</p>}
               </div>
             </div>
+
+            <IssueBriefing
+              selectedIssues={selectedIssues}
+              officials={officials}
+              issueVotesByMember={issueVotesByMember}
+              loading={issueBriefingLoading}
+              error={issueBriefingError}
+            />
 
             <div className="member-grid">
               <div className="result-group">

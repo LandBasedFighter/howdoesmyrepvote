@@ -482,6 +482,153 @@ describe('App', () => {
     expect(screen.getByText('Nay')).toBeInTheDocument()
   })
 
+  it('shows issue-first briefing cards with match counts and highlighted votes', async () => {
+    const fetchMock = vi.fn(url => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?context=briefing&limit=40')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '6329', title: 'Veterans Health Care Improvement Act', type: 'HR' },
+              date: '2026-01-03T12:00:00-05:00',
+              description: 'Veterans Health Care Improvement Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '74',
+              voterContext: {
+                headline: 'Veterans Health Care Improvement Act',
+                impact: 'This bill would expand care access for veterans and patients.',
+                issue: 'Healthcare',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      if (urlText.includes('/member/S000001/votes?context=briefing&limit=40')) {
+        return Promise.resolve({ json: () => Promise.resolve({ votes: [] }) })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [{
+            bioguideId: 'S000001',
+            name: 'Warnock, Raphael G.',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'Senate' }] },
+          }],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^healthcare$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('your issue briefing')).toBeInTheDocument()
+    expect(screen.getByText('1 matching recent vote')).toBeInTheDocument()
+    expect(screen.getByText('Veterans Health Care Improvement Act')).toBeInTheDocument()
+    expect(screen.getByText('Henry C. "Hank" Johnson Voted Yea')).toBeInTheDocument()
+    expect(screen.getByText('recent roll-call snapshot, not a full career scorecard.')).toBeInTheDocument()
+  })
+
+  it('shows a soft empty state when an issue has no exact recent vote match', async () => {
+    const fetchMock = vi.fn(url => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?context=briefing&limit=40')) {
+        return Promise.resolve({ json: () => Promise.resolve({ votes: [] }) })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^housing$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    expect(await screen.findByText('your issue briefing')).toBeInTheDocument()
+    expect(screen.getByText('no exact recent vote found yet. try policy profile for broader signals.')).toBeInTheDocument()
+  })
+
+  it('keeps visible recent votes separate from deeper issue briefing depth', async () => {
+    const fetchMock = vi.fn(url => {
+      const urlText = String(url)
+      if (urlText.includes('/representatives')) {
+        return Promise.resolve({ json: () => Promise.resolve({ representatives: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?context=briefing&limit=40')) {
+        return Promise.resolve({ json: () => Promise.resolve({ votes: [] }) })
+      }
+      if (urlText.includes('/member/R000000/votes?limit=5')) {
+        return Promise.resolve({ json: () => Promise.resolve({ votes: [] }) })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^healthcare$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('http://localhost:5000/member/R000000/votes?context=briefing&limit=40')
+      expect(fetchMock).toHaveBeenCalledWith('http://localhost:5000/member/R000000/votes?limit=5')
+    })
+  })
+
   it('renders the site footer with lowercase Morgan Guinyard contact links', () => {
     render(<App />)
 
