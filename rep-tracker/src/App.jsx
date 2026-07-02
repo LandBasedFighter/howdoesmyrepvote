@@ -760,12 +760,8 @@ function App() {
   useEffect(() => {
     const currentOfficials = allOfficials(data)
     const currentRequestKey = briefingRequestKey(currentOfficials)
-    setIssueVotesByMember({})
-    setIssueBriefingDataKey("")
 
     if (!selectedIssues.length || !currentOfficials.length) {
-      setIssueBriefingError("")
-      setIssueBriefingLoading(false)
       return
     }
 
