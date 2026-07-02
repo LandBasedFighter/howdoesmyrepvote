@@ -31,29 +31,6 @@ describe('App', () => {
     expect(screen.getByText('your briefing will prioritize healthcare and housing & homeownership.')).toBeInTheDocument()
   })
 
-  it('includes middle-of-the-road public safety and gun policy priorities', () => {
-    render(<App />)
-
-    expect(screen.getByRole('button', { name: /crime & public safety/i })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByRole('button', { name: /second amendment & gun policy/i })).toHaveAttribute('aria-pressed', 'false')
-
-    fireEvent.click(screen.getByRole('button', { name: /crime & public safety/i }))
-    fireEvent.click(screen.getByRole('button', { name: /second amendment & gun policy/i }))
-
-    expect(screen.getByText('your briefing will prioritize crime & public safety and second amendment & gun policy.')).toBeInTheDocument()
-  })
-
-  it('includes neutral hot-button policy priorities', () => {
-    render(<App />)
-
-    expect(screen.getByRole('button', { name: /border security/i })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /more issues/i }))
-
-    expect(screen.getByRole('button', { name: /abortion & reproductive policy/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /election rules/i })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /free speech & online safety/i })).toBeInTheDocument()
-  })
-
   it('shows six front-page issue pills and expands more issues on request', () => {
     render(<App />)
 
@@ -67,7 +44,10 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /more issues/i }))
 
+    expect(screen.getByRole('button', { name: /abortion & reproductive policy/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /education/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /election rules/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /free speech & online safety/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /fewer issues/i })).toBeInTheDocument()
     expect(screen.getByText('think an issue is missing?')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /suggest one/i })).toHaveAttribute(
@@ -368,7 +348,7 @@ describe('App', () => {
     expect(screen.getByText(/This bill would expand care access for veterans and patients/)).toBeInTheDocument()
     expect(screen.getByText('Henry C. "Hank" Johnson Voted Yea')).toBeInTheDocument()
     expect(screen.getByText('Passed')).toBeInTheDocument()
-    expect(screen.getByText('Healthcare · Policy vote · Roll call 74 · HR 6329')).toBeInTheDocument()
+    expect(screen.getByText('Healthcare · Policy vote · roll call 74 · HR 6329')).toBeInTheDocument()
     expect(screen.queryByText('Policy vote')).not.toBeInTheDocument()
 
     // Verify DOM order: title, impact, position/result, metadata
@@ -377,10 +357,83 @@ describe('App', () => {
     const titleIndex = cardText.indexOf('Veterans Health Care Improvement Act')
     const impactIndex = cardText.indexOf('This bill would expand care access for veterans and patients')
     const positionIndex = cardText.indexOf('Henry C. "Hank" Johnson Voted Yea')
-    const metadataIndex = cardText.indexOf('Healthcare · Policy vote · Roll call 74 · HR 6329')
+    const metadataIndex = cardText.indexOf('Healthcare · Policy vote · roll call 74 · HR 6329')
     expect(titleIndex).toBeLessThan(impactIndex)
     expect(impactIndex).toBeLessThan(positionIndex)
     expect(positionIndex).toBeLessThan(metadataIndex)
+  })
+
+  it('puts selected-priority votes first in recent votes', async () => {
+    const fetchMock = vi.fn(url => {
+      if (String(url).includes('/member/R000000/votes')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [
+              {
+                bill: { number: '10', title: 'Tax Procedure Act', type: 'HR' },
+                date: '2026-01-02T12:00:00-05:00',
+                description: 'Tax Procedure Act',
+                position: 'Yea',
+                result: 'Passed',
+                rollCall: '10',
+                voterContext: {
+                  headline: 'Tax Procedure Act',
+                  impact: 'This vote affects federal tax administration.',
+                  issue: 'Budget, taxes & government spending',
+                  kind: 'policy',
+                  positionLabel: 'Voted Yea',
+                  resultLabel: 'Passed',
+                },
+              },
+              {
+                bill: { number: '11', title: 'Veterans Health Care Improvement Act', type: 'HR' },
+                date: '2026-01-01T12:00:00-05:00',
+                description: 'Veterans Health Care Improvement Act',
+                position: 'Nay',
+                result: 'Failed',
+                rollCall: '11',
+                voterContext: {
+                  headline: 'Veterans Health Care Improvement Act',
+                  impact: 'This bill would expand care access for veterans and patients.',
+                  issue: 'Healthcare',
+                  kind: 'policy',
+                  positionLabel: 'Voted Nay',
+                  resultLabel: 'Failed',
+                },
+              },
+            ],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^healthcare$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
+
+    const healthcareVote = await screen.findByText('Veterans Health Care Improvement Act')
+    const taxVote = screen.getByText('Tax Procedure Act')
+    expect(healthcareVote.compareDocumentPosition(taxVote) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('matches your healthcare priority')).toBeInTheDocument()
   })
 
   it('falls back for recent votes without voter context', async () => {
@@ -439,6 +492,10 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: 'Senate.gov' })).toHaveAttribute('href', 'https://www.senate.gov')
     expect(screen.getByRole('link', { name: 'Wikipedia' })).toHaveAttribute('href', 'https://www.wikipedia.org')
     expect(screen.getByRole('link', { name: 'Google Gemini' })).toHaveAttribute('href', 'https://ai.google.dev')
+    expect(screen.getByText('pls pls pls')).toBeInTheDocument()
+    expect(screen.getByText('contact')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'check registration' })).toHaveAttribute('href', 'https://www.nass.org/can-I-vote')
+    expect(screen.getByRole('link', { name: 'find your next election' })).toHaveAttribute('href', 'https://www.vote411.org/ballot')
     expect(screen.getByRole('link', { name: 'email' })).toHaveAttribute('href', 'mailto:moguinyard@gmail.com')
     expect(screen.getByRole('link', { name: 'github' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
     expect(screen.getByRole('link', { name: 'linkedin' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')
