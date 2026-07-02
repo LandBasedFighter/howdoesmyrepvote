@@ -1,5 +1,6 @@
 .claude
 .superpowers/
+.playwright-mcp/
 .env
 __pycache__/**
 .env.example

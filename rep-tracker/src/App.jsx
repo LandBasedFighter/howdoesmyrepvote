@@ -5,22 +5,22 @@ const DEFAULT_API_HOST = typeof window === "undefined" ? "localhost" : window.lo
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? `http://${DEFAULT_API_HOST}:5000`
 const SEARCH_MODES = {
   address: {
-    label: "Address",
-    inputLabel: "Your address",
+    label: "address",
+    inputLabel: "your address",
     placeholder: "350 5th Ave, New York",
-    helper: "We only use your address to identify your district. Complete addresses work best.",
+    helper: "we only use your address to identify your district. complete addresses work best.",
   },
   district: {
-    label: "District",
-    inputLabel: "Congressional district",
+    label: "district",
+    inputLabel: "congressional district",
     placeholder: "NY-12 or New York 12",
-    helper: "Search directly by district name or code, such as NY-12, New York 12, California 30, or Vermont at-large.",
+    helper: "search directly by district name or code, such as NY-12, New York 12, California 30, or Vermont at-large.",
   },
   representative: {
-    label: "Representative",
-    inputLabel: "Representative name",
+    label: "representative",
+    inputLabel: "representative name",
     placeholder: "Alexandria Ocasio-Cortez",
-    helper: "Search by a current House member's name if you do not know their district.",
+    helper: "search by a current house member's name if you do not know their district.",
   },
 }
 const CIVIC_ISSUES = [
@@ -239,7 +239,7 @@ function formatLatestAction(latestAction) {
 
 function formatBillMeta(bill) {
   const parts = [`${bill.type ?? "Bill"} ${bill.number ?? ""}`.trim()]
-  if (bill.introducedDate) parts.push(`Introduced ${bill.introducedDate}`)
+  if (bill.introducedDate) parts.push(`introduced ${bill.introducedDate}`)
   if (bill.policyArea) parts.push(bill.policyArea)
   return parts.filter(Boolean)
 }
@@ -262,7 +262,7 @@ function formatVoteMeta(vote) {
 function displayVotePosition(memberName, vote) {
   const label = vote.voterContext?.positionLabel
   if (label) return `${memberName} ${label}`
-  return vote.position || "Position unavailable"
+  return vote.position || "position unavailable"
 }
 
 function voteMetadata(vote) {
@@ -272,13 +272,33 @@ function voteMetadata(vote) {
   return [
     context?.issue,
     kind ? `${kind[0].toUpperCase()}${kind.slice(1)} vote` : undefined,
-    vote.rollCall ? `Roll call ${vote.rollCall}` : undefined,
+    vote.rollCall ? `roll call ${vote.rollCall}` : undefined,
     bill?.type && bill?.number ? `${bill.type} ${bill.number}` : undefined,
   ].filter(Boolean).join(" · ")
 }
 
+function voteIssue(vote) {
+  return vote.voterContext?.issue || vote.interpretation?.issue || ""
+}
+
+function prioritizeVotes(votes, selectedIssues) {
+  if (!selectedIssues.length) return votes
+  return [...votes].sort((left, right) => {
+    const leftMatch = selectedIssues.includes(voteIssue(left)) ? 0 : 1
+    const rightMatch = selectedIssues.includes(voteIssue(right)) ? 0 : 1
+    if (leftMatch !== rightMatch) return leftMatch - rightMatch
+    return String(right.date || "").localeCompare(String(left.date || ""))
+  })
+}
+
 function issueLabel(issueKey) {
   return (CIVIC_ISSUES.find(issue => issue.key === issueKey)?.key || issueKey).toLowerCase()
+}
+
+function priorityMatchLabel(vote, selectedIssues) {
+  const issue = voteIssue(vote)
+  if (!selectedIssues.includes(issue)) return ""
+  return `matches your ${issueLabel(issue)} priority`
 }
 
 function formattedIssueSelection(issueKeys) {
@@ -294,23 +314,23 @@ function issueExample(issue) {
   if (!vote) return ""
   const title = vote.description || vote.bill?.title || vote.question
   if (!title) return ""
-  return `${vote.position || "Voted"} on ${title}`
+  return `${vote.position || "voted"} on ${title}`
 }
 
 function profileSummaryNote(profile) {
   const policyCount = profile.policyVoteCount ?? 0
   const scannedCount = profile.scannedVoteCount ?? 0
   if (profile.aiSummary?.provider === "gemini") {
-    return `AI-generated summary based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. Review the evidence below; this is a snapshot, not a full career scorecard.`
+    return `ai-generated summary based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. review the evidence below; this is a snapshot, not a full career scorecard.`
   }
-  return `Based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. AI summary is unavailable; this is a snapshot, not a full career scorecard.`
+  return `based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. ai summary is unavailable; this is a snapshot, not a full career scorecard.`
 }
 
 function sourceLabel(type, items) {
-  if (type === "profile") return "Source: normalized recent roll-call votes"
-  if (type === "legislation") return "Source: Congress.gov"
-  if (items.some(item => item.source === "senate.gov")) return "Source: Senate.gov roll call XML"
-  return "Source: Congress.gov House roll call data"
+  if (type === "profile") return "source: normalized recent roll-call votes"
+  if (type === "legislation") return "source: Congress.gov"
+  if (items.some(item => item.source === "senate.gov")) return "source: Senate.gov roll call XML"
+  return "source: Congress.gov house roll call data"
 }
 
 function LoadingButtonContent({ loading, children, loadingText }) {
@@ -353,7 +373,7 @@ function DetailSkeletonList({ label }) {
 
 function ResultsSkeleton() {
   return (
-    <section className="results-section results-skeleton" aria-live="polite" aria-label="Loading representatives">
+    <section className="results-section results-skeleton" aria-live="polite" aria-label="loading representatives">
       <div className="results-header">
         <div>
           <SkeletonLine width="90px" />
@@ -385,16 +405,18 @@ function ResultsSkeleton() {
   )
 }
 
-function VoteCard({ vote, displayName }) {
+function VoteCard({ vote, displayName, selectedIssues }) {
   const context = vote.voterContext
   const metadata = voteMetadata(vote)
   const headline = context?.headline || vote.description || "Vote details unavailable"
   const impact = context?.impact || vote.interpretation?.summary
   const result = context?.resultLabel || vote.result
+  const priorityLabel = priorityMatchLabel(vote, selectedIssues)
 
   return (
     <li className={`detail-item vote-card ${context ? "vote-card-contextual" : ""}`}>
       <div className="detail-title">{headline}</div>
+      {priorityLabel && <div className="priority-match-badge">{priorityLabel}</div>}
       {impact && <div className="vote-impact">{impact}</div>}
       {context?.contextNote && <div className="vote-context-note">{context.contextNote}</div>}
       {!context && vote.question && vote.question !== vote.description && (
@@ -412,7 +434,7 @@ function VoteCard({ vote, displayName }) {
   )
 }
 
-function MemberCard({ member }) {
+function MemberCard({ member, selectedIssues }) {
   const [bills, setBills] = useState([])
   const [votes, setVotes] = useState([])
   const [profile, setProfile] = useState(null)
@@ -455,7 +477,7 @@ function MemberCard({ member }) {
     }
   }
 
-  const expandedItems = expandedType === "votes" ? votes : bills
+  const expandedItems = expandedType === "votes" ? prioritizeVotes(votes, selectedIssues) : bills
   const partyClass = getPartyClass(member.partyName)
   const displayName = formatMemberName(member.name)
 
@@ -473,18 +495,18 @@ function MemberCard({ member }) {
 
       <div className="member-actions">
         <button className="secondary-button" onClick={() => fetchMemberDetails("profile")} disabled={Boolean(loadingType)}>
-          <LoadingButtonContent loading={loadingType === "profile"} loadingText="Building profile">
-            {expandedType === "profile" ? "Hide profile" : "Policy profile"}
+          <LoadingButtonContent loading={loadingType === "profile"} loadingText="building profile">
+            {expandedType === "profile" ? "hide profile" : "policy profile"}
           </LoadingButtonContent>
         </button>
         <button className="secondary-button" onClick={() => fetchMemberDetails("votes")} disabled={Boolean(loadingType)}>
-          <LoadingButtonContent loading={loadingType === "votes"} loadingText="Loading votes">
-            {expandedType === "votes" ? "Hide votes" : "Recent votes"}
+          <LoadingButtonContent loading={loadingType === "votes"} loadingText="loading votes">
+            {expandedType === "votes" ? "hide votes" : "recent votes"}
           </LoadingButtonContent>
         </button>
         <button className="secondary-button" onClick={() => fetchMemberDetails("legislation")} disabled={Boolean(loadingType)}>
-          <LoadingButtonContent loading={loadingType === "legislation"} loadingText="Loading bills">
-            {expandedType === "legislation" ? "Hide bills" : "Sponsored bills"}
+          <LoadingButtonContent loading={loadingType === "legislation"} loadingText="loading bills">
+            {expandedType === "legislation" ? "hide bills" : "sponsored bills"}
           </LoadingButtonContent>
         </button>
       </div>
@@ -498,7 +520,7 @@ function MemberCard({ member }) {
           {profile.aiSummary && (
             <div className="ai-summary-card">
               <div className="ai-summary-label">
-                {profile.aiSummary.provider === "gemini" ? "Policy Flash analysis" : "Policy analysis unavailable"}
+                {profile.aiSummary.provider === "gemini" ? "policy flash analysis" : "policy analysis unavailable"}
               </div>
               <div className="ai-summary-headline">{profile.aiSummary.headline}</div>
               {profile.aiSummary.takeaways?.length > 0 && (
@@ -526,21 +548,21 @@ function MemberCard({ member }) {
               ))}
             </div>
           ) : (
-            <p className="empty-state">Not enough substantive votes in the scanned snapshot.</p>
+            <p className="empty-state">not enough substantive votes in the scanned snapshot.</p>
           )}
           {profile.notableVotes.length > 0 && (
             <>
-              <div className="section-label">Evidence votes</div>
+              <div className="section-label">evidence votes</div>
               <ul className="detail-list">
                 {profile.notableVotes.map((vote, i) => (
                   <li key={`${vote.rollCall}-${vote.date}-${i}`} className="detail-item">
-                    <span className="vote-kind vote-kind-policy">Policy vote</span>
+                    <span className="vote-kind vote-kind-policy">policy vote</span>
                     <div className="detail-title">{vote.description || "Vote details unavailable"}</div>
                     <div className="detail-meta">
                       {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
                     </div>
                     <div className="vote-row">
-                      <span className="vote-position">{vote.position || "Position unavailable"}</span>
+                      <span className="vote-position">{vote.position || "position unavailable"}</span>
                       {vote.result && <span>{vote.result}</span>}
                     </div>
                   </li>
@@ -557,7 +579,7 @@ function MemberCard({ member }) {
           <ul className="detail-list">
             {expandedType === "votes"
               ? expandedItems.map((vote, i) => (
-                <VoteCard key={`${vote.rollCall}-${vote.date}-${i}`} vote={vote} displayName={displayName} />
+                <VoteCard key={`${vote.rollCall}-${vote.date}-${i}`} vote={vote} displayName={displayName} selectedIssues={selectedIssues} />
               ))
               : expandedItems.map((bill, i) => (
                 <li key={`${bill.type}-${bill.number}-${i}`} className="detail-item">
@@ -576,7 +598,7 @@ function MemberCard({ member }) {
       )}
 
       {!loadingType && expandedType !== "profile" && expandedType && expandedItems.length === 0 && !memberError && (
-        <p className="empty-state">No {expandedType === "votes" ? "recent votes" : "sponsored legislation"} found.</p>
+        <p className="empty-state">no {expandedType === "votes" ? "recent votes" : "sponsored legislation"} found.</p>
       )}
     </article>
   )
@@ -702,9 +724,9 @@ function App() {
       <main className="app-shell">
       <section className="hero">
         <div>
-          <h1>Find your representatives and how they vote.</h1>
+          <h1>find your representatives and how they vote.</h1>
           <p className="hero-copy">
-            Enter a street address or congressional district to find your House member, senators, recent votes, and sponsored legislation.
+            enter a street address or congressional district to find your house member, senators, recent votes, and sponsored legislation.
           </p>
         </div>
 
@@ -756,7 +778,7 @@ function App() {
             )}
             <button className="primary-button" onClick={() => fetchReps()} disabled={loading}>
               <LoadingButtonContent loading={loading} loadingText="Searching">
-                Search
+                search
               </LoadingButtonContent>
             </button>
           </div>
@@ -818,15 +840,15 @@ function App() {
 
             <div className="member-grid">
               <div className="result-group">
-                <h2>Your Representative</h2>
+                <h2>your representative</h2>
                 {data.representative
-                  ? <MemberCard member={data.representative} />
-                  : <p className="empty-state">No representative found.</p>}
+                  ? <MemberCard member={data.representative} selectedIssues={selectedIssues} />
+                  : <p className="empty-state">no representative found.</p>}
               </div>
 
               <div className="result-group">
-                <h2>Your Senators</h2>
-                {data.senators.map(s => <MemberCard key={s.bioguideId} member={s} />)}
+                <h2>your senators</h2>
+                {data.senators.map(s => <MemberCard key={s.bioguideId} member={s} selectedIssues={selectedIssues} />)}
               </div>
             </div>
           </section>
@@ -837,12 +859,24 @@ function App() {
       <footer className="site-footer">
         <div className="footer-brand">
           <span>© 2026 morgan guinyard</span>
-          <nav aria-label="morgan guinyard links">
-            <a href="https://vote.gov">register to vote</a>
-            <a href="mailto:moguinyard@gmail.com">email</a>
-            <a href="https://github.com/LandBasedFighter">github</a>
-            <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">linkedin</a>
-          </nav>
+          <div className="footer-link-groups">
+            <div className="footer-link-group">
+              <span>pls pls pls</span>
+              <nav aria-label="civic links">
+                <a href="https://vote.gov">register to vote</a>
+                <a href="https://www.nass.org/can-I-vote">check registration</a>
+                <a href="https://www.vote411.org/ballot">find your next election</a>
+              </nav>
+            </div>
+            <div className="footer-link-group">
+              <span>contact</span>
+              <nav aria-label="morgan guinyard links">
+                <a href="mailto:moguinyard@gmail.com">email</a>
+                <a href="https://github.com/LandBasedFighter">github</a>
+                <a href="https://www.linkedin.com/in/morgan-guinyard-6304a1284/">linkedin</a>
+              </nav>
+            </div>
+          </div>
         </div>
         <div className="footer-powered-by">
           <span>powered by:</span>
