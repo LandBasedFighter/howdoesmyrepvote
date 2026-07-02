@@ -245,6 +245,78 @@ h3 {
   background: transparent;
 }
 
+.issue-briefing {
+  display: grid;
+  gap: 16px;
+  margin-top: 22px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 250, 243, 0.72);
+}
+
+.issue-briefing-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.issue-briefing-header p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.issue-briefing-status {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.issue-briefing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+}
+
+.issue-briefing-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.issue-briefing-card-header {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.issue-briefing-card-header h3 {
+  font-size: 1rem;
+}
+
+.issue-briefing-card-header span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.issue-briefing-empty {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .selected-issues-note {
   color: var(--accent-dark);
   font-weight: 800;
@@ -995,6 +1067,20 @@ h3 {
 
   .member-summary {
     align-items: flex-start;
+  }
+
+  .issue-briefing {
+    padding: 14px;
+  }
+
+  .issue-briefing-header,
+  .issue-briefing-card-header {
+    display: grid;
+  }
+
+  .issue-briefing-status,
+  .issue-briefing-card-header span {
+    width: fit-content;
   }
 
   .footer-link-group {
