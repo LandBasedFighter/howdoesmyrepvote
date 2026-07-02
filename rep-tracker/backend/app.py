@@ -495,12 +495,19 @@ def vote_text(vote):
     ).lower()
 
 
+def references_hconres_86_iran_war(vote):
+    text = vote_text(vote)
+    return "h.con.res. 86" in text or "hconres 86" in text
+
+
 def classify_issue(vote, context_text=None):
     text = " ".join(part for part in [vote_text(vote), str(context_text or "")] if part).lower()
     bill = vote.get("bill") or {}
     bill_type = str(bill.get("type") or "").lower()
     if bill_type in {"pn", "nomination"} or "confirmation:" in text:
         return "Federal courts & nominations"
+    if references_hconres_86_iran_war(vote):
+        return "Defense, veterans & foreign policy"
     for issue, terms in ISSUE_TAXONOMY.items():
         if any(term in text for term in terms):
             return issue
@@ -513,6 +520,9 @@ def vote_kind(vote):
     title_text = bill_text(vote)
     question = question_text(vote)
     text = vote_text(vote)
+
+    if references_hconres_86_iran_war(vote):
+        return "policy"
 
     if (
         "motion to recommit" in question
@@ -898,7 +908,7 @@ def ai_stance_summary(issues, evidence_votes, scan_count, policy_count):
     prompt = json.dumps({
         "instruction": (
             "You are a nonpartisan civic explainer writing for a busy voter who wants to know what these votes could mean in real life. "
-            "Do not write a generic scorecard. Translate the voting pattern into concrete, everyday tradeoffs. "
+            "Do not write generic praise or criticism. Translate the voting pattern into concrete, everyday tradeoffs. "
             "Avoid congressional jargon such as cloture, motion, roll call, and procedural unless it is essential. "
             "Avoid vague phrases like 'mixed record', 'regulatory issues', 'suggesting', 'indicating', or 'measures aimed at'. "
             "Prioritize kitchen-table policy signals over repetitive nominations. "
@@ -971,7 +981,7 @@ def build_stance_profile(votes, limit):
     ai_evidence_votes = diversified_policy_votes(policy_votes, STANCE_EVIDENCE_LIMIT)
     return {
         "aiSummary": ai_stance_summary(issue_summaries[:5], ai_evidence_votes, len(votes), len(policy_votes)),
-        "caveat": f"Analyzed {len(policy_votes)} substantive policy votes from {len(votes)} recent roll calls. This is a snapshot, not a full career scorecard.",
+        "caveat": f"Analyzed {len(policy_votes)} substantive policy votes from {len(votes)} recent roll calls.",
         "issues": issue_summaries[:5],
         "notableVotes": notable_votes,
         "policyVoteCount": len(policy_votes),

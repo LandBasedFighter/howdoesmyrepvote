@@ -978,6 +978,23 @@ def test_enrich_vote_uses_bill_context_for_voter_impact():
     )
 
 
+def test_classifies_hconres_86_as_iran_war_policy_when_title_is_sparse():
+    vote = {
+        "bill": {"number": "86", "title": "Providing for consideration of H.Con.Res. 86", "type": "HRES"},
+        "congress": 119,
+        "description": "Providing for consideration of H.Con.Res. 86",
+        "position": "Yea",
+        "question": "On Agreeing to the Resolution",
+        "result": "Passed",
+    }
+
+    enriched = backend.enrich_vote(vote)
+
+    assert enriched["interpretation"]["kind"] == "policy"
+    assert enriched["interpretation"]["issue"] == "Defense, veterans & foreign policy"
+    assert enriched["voterContext"]["issue"] == "Defense, veterans & foreign policy"
+
+
 def test_enrich_vote_uses_bill_summary_to_classify_environmental_regulation():
     vote = {
         "bill": {"number": "6398", "title": "RED Tape Act", "type": "HR"},

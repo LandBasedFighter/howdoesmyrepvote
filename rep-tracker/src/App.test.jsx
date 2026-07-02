@@ -672,7 +672,7 @@ describe('App', () => {
     expect(screen.getByText('1 matching recent vote')).toBeInTheDocument()
     expect(screen.getByText('Veterans Health Care Improvement Act')).toBeInTheDocument()
     expect(screen.getByText('Henry C. "Hank" Johnson Voted Yea')).toBeInTheDocument()
-    expect(screen.getByText('recent roll-call snapshot, not a full career scorecard.')).toBeInTheDocument()
+    expect(screen.queryByText(/career scorecard/i)).not.toBeInTheDocument()
   })
 
   it('matches selected issue chips to related backend issue buckets', async () => {

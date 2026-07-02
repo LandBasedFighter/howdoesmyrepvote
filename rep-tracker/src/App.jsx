@@ -391,9 +391,9 @@ function profileSummaryNote(profile) {
   const policyCount = profile.policyVoteCount ?? 0
   const scannedCount = profile.scannedVoteCount ?? 0
   if (profile.aiSummary?.provider === "gemini") {
-    return `ai-generated summary based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. review the evidence below; this is a snapshot, not a full career scorecard.`
+    return `ai-generated summary based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. review the evidence below.`
   }
-  return `based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. ai summary is unavailable; this is a snapshot, not a full career scorecard.`
+  return `based on ${policyCount} substantive policy votes from ${scannedCount} recent roll calls. ai summary is unavailable.`
 }
 
 function sourceLabel(type, items) {
@@ -516,7 +516,7 @@ function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading,
       <div className="issue-briefing-header">
         <div>
           <h2>your issue briefing</h2>
-          <p>recent roll-call snapshot, not a full career scorecard.</p>
+          <p>recent roll-call snapshot.</p>
         </div>
         {loading && <span className="issue-briefing-status">checking recent votes</span>}
       </div>
