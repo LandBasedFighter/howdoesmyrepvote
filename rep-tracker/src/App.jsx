@@ -285,23 +285,34 @@ function voteIssue(vote) {
   return vote.voterContext?.issue || vote.interpretation?.issue || ""
 }
 
+function issueMatchKeys(issueKey) {
+  return [issueKey, ...(ISSUE_MATCH_ALIASES[issueKey] || [])]
+    .map(issue => String(issue || "").trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function matchingSelectedIssue(vote, selectedIssues) {
+  const normalizedVoteIssue = String(voteIssue(vote) || "").trim().toLowerCase()
+  return selectedIssues.find(issueKey => issueMatchKeys(issueKey).includes(normalizedVoteIssue)) || ""
+}
+
 function prioritizeVotes(votes, selectedIssues) {
   if (!selectedIssues.length) return votes
   return [...votes].sort((left, right) => {
-    const leftMatch = selectedIssues.includes(voteIssue(left)) ? 0 : 1
-    const rightMatch = selectedIssues.includes(voteIssue(right)) ? 0 : 1
+    const leftMatch = matchingSelectedIssue(left, selectedIssues) ? 0 : 1
+    const rightMatch = matchingSelectedIssue(right, selectedIssues) ? 0 : 1
     if (leftMatch !== rightMatch) return leftMatch - rightMatch
     return String(right.date || "").localeCompare(String(left.date || ""))
   })
 }
 
 function issueLabel(issueKey) {
-  return (CIVIC_ISSUES.find(issue => issue.key === issueKey)?.key || issueKey).toLowerCase()
+  return (CIVIC_ISSUES.find(issue => issue.key === issueKey)?.label || issueKey).toLowerCase()
 }
 
 function priorityMatchLabel(vote, selectedIssues) {
-  const issue = voteIssue(vote)
-  if (!selectedIssues.includes(issue)) return ""
+  const issue = matchingSelectedIssue(vote, selectedIssues)
+  if (!issue) return ""
   return `matches your ${issueLabel(issue)} priority`
 }
 
@@ -338,12 +349,6 @@ function compareBriefingVotes(left, right) {
   if (leftScore[0] !== rightScore[0]) return leftScore[0] - rightScore[0]
   if (leftScore[1] !== rightScore[1]) return leftScore[1] - rightScore[1]
   return rightScore[2].localeCompare(leftScore[2])
-}
-
-function issueMatchKeys(issueKey) {
-  return [issueKey, ...(ISSUE_MATCH_ALIASES[issueKey] || [])]
-    .map(issue => String(issue || "").trim().toLowerCase())
-    .filter(Boolean)
 }
 
 function buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials) {

@@ -28,7 +28,7 @@ describe('App', () => {
 
     expect(screen.getByRole('button', { name: /healthcare/i })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: /housing/i })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByText('your briefing will prioritize healthcare and housing & homeownership.')).toBeInTheDocument()
+    expect(screen.getByText('your briefing will prioritize healthcare and housing.')).toBeInTheDocument()
   })
 
   it('shows six front-page issue pills and expands more issues on request', () => {
@@ -434,6 +434,132 @@ describe('App', () => {
     const taxVote = screen.getByText('Tax Procedure Act')
     expect(healthcareVote.compareDocumentPosition(taxVote) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.getByText('matches your healthcare priority')).toBeInTheDocument()
+  })
+
+  it('uses related backend issue buckets when prioritizing recent votes', async () => {
+    const fetchMock = vi.fn(url => {
+      if (String(url).includes('/member/R000000/votes')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [
+              {
+                bill: { number: '20', title: 'Tax Procedure Act', type: 'HR' },
+                date: '2026-01-02T12:00:00-05:00',
+                description: 'Tax Procedure Act',
+                position: 'Yea',
+                result: 'Passed',
+                rollCall: '20',
+                voterContext: {
+                  headline: 'Tax Procedure Act',
+                  impact: 'This vote affects federal tax administration.',
+                  issue: 'Budget, taxes & government spending',
+                  kind: 'policy',
+                  positionLabel: 'Voted Yea',
+                  resultLabel: 'Passed',
+                },
+              },
+              {
+                bill: { number: '21', title: 'Border Operations Act', type: 'HR' },
+                date: '2026-01-01T12:00:00-05:00',
+                description: 'Border Operations Act',
+                position: 'Nay',
+                result: 'Failed',
+                rollCall: '21',
+                voterContext: {
+                  headline: 'Border Operations Act',
+                  impact: 'This bill affects border operations and immigration enforcement.',
+                  issue: 'Immigration & border',
+                  kind: 'policy',
+                  positionLabel: 'Voted Nay',
+                  resultLabel: 'Failed',
+                },
+              },
+            ],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^border security$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
+
+    const borderVote = await screen.findByText('Border Operations Act')
+    const taxVote = screen.getByText('Tax Procedure Act')
+    expect(borderVote.compareDocumentPosition(taxVote) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByText('matches your border security priority')).toBeInTheDocument()
+  })
+
+  it('uses selected issue display labels in recent vote badges', async () => {
+    const fetchMock = vi.fn(url => {
+      if (String(url).includes('/member/R000000/votes')) {
+        return Promise.resolve({
+          json: () => Promise.resolve({
+            votes: [{
+              bill: { number: '20', title: 'Tax Procedure Act', type: 'HR' },
+              date: '2026-01-02T12:00:00-05:00',
+              description: 'Tax Procedure Act',
+              position: 'Yea',
+              result: 'Passed',
+              rollCall: '20',
+              voterContext: {
+                headline: 'Tax Procedure Act',
+                impact: 'This vote affects federal tax administration.',
+                issue: 'Budget, taxes & government spending',
+                kind: 'policy',
+                positionLabel: 'Voted Yea',
+                resultLabel: 'Passed',
+              },
+            }],
+          }),
+        })
+      }
+      return Promise.resolve({
+        json: () => Promise.resolve({
+          state: 'GA',
+          district: '4',
+          districtLabel: 'GA-4',
+          representative: {
+            bioguideId: 'R000000',
+            name: 'Johnson, Henry C. "Hank"',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'House of Representatives' }] },
+          },
+          senators: [],
+        }),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /^taxes & spending$/i }))
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '123 Main St Decatur, GA 30030' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /recent votes/i }))
+
+    expect(await screen.findByText('matches your taxes & spending priority')).toBeInTheDocument()
+    expect(screen.queryByText('matches your budget, taxes & government spending priority')).not.toBeInTheDocument()
   })
 
   it('falls back for recent votes without voter context', async () => {
