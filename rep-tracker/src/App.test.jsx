@@ -823,7 +823,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /search/i }))
 
     expect(await screen.findByText('your issue briefing')).toBeInTheDocument()
-    expect(screen.getByText('no exact recent vote found yet. try policy profile for broader signals.')).toBeInTheDocument()
+    expect(screen.getByText('no recent floor vote or backed bill on this issue yet. try policy profile for broader signals.')).toBeInTheDocument()
   })
 
   it('keeps visible recent votes separate from deeper issue briefing depth', async () => {
@@ -962,7 +962,7 @@ describe('App', () => {
       json: () => Promise.resolve({ votes: [] }),
     })
 
-    expect(await screen.findByText('no exact recent vote found yet. try policy profile for broader signals.')).toBeInTheDocument()
+    expect(await screen.findByText('no recent floor vote or backed bill on this issue yet. try policy profile for broader signals.')).toBeInTheDocument()
   })
 
   it('keeps successful issue matches when one official briefing request fails', async () => {
