@@ -160,6 +160,40 @@ def clear_cache():
         _cache.clear()
 
 
+WARM_MIN_INTERVAL_SECONDS = int(os.getenv("WARM_MIN_INTERVAL_SECONDS", "900"))
+_last_warm = {}
+_last_warm_lock = Lock()
+
+
+def warm_index(cache_key, builder, ttl=CACHE_TTL_SECONDS):
+    """Proactively refresh a slow index cache entry off the request critical path.
+
+    A scheduled ping calls this so real users never wait on the multi-second
+    roll-call scan. While the rebuild runs, the previous (still-fresh) value stays
+    in the cache and is served on cached()'s fast path, so callers never block.
+    Throttled by WARM_MIN_INTERVAL_SECONDS so frequent pings don't rebuild every time,
+    and single-flighted so it never duplicates an in-progress build.
+    """
+    with _last_warm_lock:
+        if monotonic() - _last_warm.get(cache_key, 0.0) < WARM_MIN_INTERVAL_SECONDS:
+            return "fresh"
+
+    key_lock = _get_key_lock(cache_key)
+    if not key_lock.acquire(blocking=False):
+        return "in-progress"
+    try:
+        value = builder()
+        if isinstance(value, dict) and value.get("error"):
+            return "error"
+        with _cache_lock:
+            _cache[cache_key] = {"value": value, "expires_at": monotonic() + ttl}
+        with _last_warm_lock:
+            _last_warm[cache_key] = monotonic()
+        return "refreshed"
+    finally:
+        key_lock.release()
+
+
 def congress_get(endpoint_or_url, **params):
     params["api_key"] = get_api_key()
     url = endpoint_or_url if endpoint_or_url.startswith("http") else f"{BASE_URL}/{endpoint_or_url}"
@@ -1683,6 +1717,25 @@ def handle_runtime_error(error):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/warm")
+def warm():
+    """Refresh the vote indexes off the user critical path (called by the keep-alive).
+    House then Senate sequentially so only one large index is built at a time."""
+    started = monotonic()
+    results = {
+        "house": warm_index(
+            ("house-vote-index", tuple(HOUSE_VOTE_SESSIONS), HOUSE_VOTE_SCAN_LIMIT),
+            build_house_vote_index,
+        ),
+        "senate": warm_index(
+            ("senate-vote-index", tuple(SENATE_VOTE_SESSIONS), SENATE_VOTE_SCAN_LIMIT),
+            build_senate_vote_index,
+        ),
+    }
+    results["elapsed_s"] = round(monotonic() - started, 1)
+    return jsonify(results)
 
 
 @app.route("/representatives")

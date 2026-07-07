@@ -1,9 +1,10 @@
 name: Keep backend awake
 
 # Render's free tier sleeps a service after ~15 minutes of inactivity, which then
-# costs a ~50s cold start on the next visit. Pinging /health every ~10 minutes keeps
-# the instance warm. A single always-on free service stays within Render's monthly
-# instance-hour allowance.
+# costs a ~50s cold start on the next visit. Pinging /warm every ~10 minutes keeps
+# the instance awake AND keeps the House/Senate vote indexes refreshed in cache, so
+# real visitors are always served from warm cache instead of waiting on a rebuild.
+# A single always-on free service stays within Render's monthly instance-hour allowance.
 on:
   schedule:
     - cron: "*/10 * * * *"
@@ -13,7 +14,7 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping backend health endpoint
+      - name: Warm backend (keeps instance awake + vote indexes cached)
         run: >-
-          curl -fsS --max-time 60 --retry 3 --retry-delay 15
-          https://howdoesmyrepvote-api.onrender.com/health
+          curl -fsS --max-time 120 --retry 2 --retry-delay 15
+          https://howdoesmyrepvote-api.onrender.com/warm
