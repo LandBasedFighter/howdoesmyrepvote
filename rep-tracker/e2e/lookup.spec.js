@@ -147,12 +147,21 @@ test('representative search keeps long names readable in the narrow hero card', 
   await page.getByRole('tab', { name: 'Representative' }).click()
   await page.getByLabel('Representative name').fill('Alexandria Ocasio-Cortez')
 
-  const inputBox = await page.getByLabel('Representative name').boundingBox()
-  const buttonBox = await page.getByRole('button', { name: 'Search' }).boundingBox()
+  // Filling an exact name auto-searches, toggling a loading/skeleton reflow. Snapshot both
+  // rects in a single layout read so the assertion can't straddle that reflow (the search
+  // button must wrap below the input in the narrow hero card).
+  const layout = await page.evaluate(() => {
+    const input = document.querySelector('.search-row input')
+    const button = document.querySelector('.search-row .primary-button')
+    if (!input || !button) return null
+    return {
+      inputBottom: input.getBoundingClientRect().bottom,
+      buttonTop: button.getBoundingClientRect().top,
+    }
+  })
 
-  expect(inputBox).not.toBeNull()
-  expect(buttonBox).not.toBeNull()
-  expect(buttonBox.y).toBeGreaterThan(inputBox.y + inputBox.height - 1)
+  expect(layout).not.toBeNull()
+  expect(layout.buttonTop).toBeGreaterThan(layout.inputBottom - 1)
 })
 
 test('address mode rejects district-looking, zip-only, and generic text without API calls', async ({ page }) => {
