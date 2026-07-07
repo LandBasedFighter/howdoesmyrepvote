@@ -18,7 +18,7 @@ load_dotenv()
 BASE_URL = "https://api.congress.gov/v3"
 CACHE_TTL_SECONDS = int(os.getenv("CACHE_TTL_SECONDS", "900"))
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
-GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
+GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "15"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
 MAX_ISSUE_BRIEFING_VOTES = int(os.getenv("MAX_ISSUE_BRIEFING_VOTES", "40"))
@@ -43,11 +43,12 @@ SENATE_VOTE_SESSIONS = [
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_FALLBACK_MODELS = [
     model.strip()
-    for model in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-2.0-flash,gemini-2.5-flash-lite").split(",")
+    for model in os.getenv("GEMINI_FALLBACK_MODELS", "gemini-2.5-flash-lite").split(",")
     if model.strip()
 ]
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/{model}:generateContent"
 GEMINI_ATTEMPTS = int(os.getenv("GEMINI_ATTEMPTS", "2"))
+GEMINI_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "700"))
 STANCE_EVIDENCE_LIMIT = int(os.getenv("STANCE_EVIDENCE_LIMIT", "20"))
 
 LOCALHOST_CORS_ALIASES = {"localhost", "127.0.0.1"}
@@ -99,6 +100,7 @@ HOUSE_DISTRICT_COUNTS = {
     "NM": 3, "NY": 26, "NC": 14, "ND": 1, "OH": 15, "OK": 5, "OR": 6, "PA": 17, "RI": 2, "SC": 7,
     "SD": 1, "TN": 9, "TX": 38, "UT": 4, "VT": 1, "VA": 11, "WA": 10, "WV": 2, "WI": 8, "WY": 1,
 }
+#TODO: update this list after 2030 census?
 AT_LARGE_STATES = {"AK", "DE", "ND", "SD", "VT", "WY"}
 
 app = Flask(__name__)
@@ -259,6 +261,8 @@ def gemini_generate_json(prompt):
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.2,
+            "maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS,
+            "thinkingConfig": {"thinkingBudget": 0},
         },
     }
 
