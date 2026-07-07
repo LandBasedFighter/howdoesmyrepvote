@@ -1,0 +1,45 @@
+name: keep-warm
+
+# Render's free tier spins a web service down after ~15 minutes with no traffic,
+# then charges a ~50s cold start on the next visit. A single scheduled ping is NOT
+# enough: GitHub's cron scheduler is best-effort and routinely delays or drops runs
+# (observed ~1 run firing in 100 minutes), which let the instance fall asleep.
+#
+# Hardening strategy (safe here because this is a PUBLIC repo -> unlimited free
+# Actions minutes):
+#   1. Schedule frequently (every 5 min) to maximize the chance GitHub actually
+#      launches a run inside any given 15-minute window.
+#   2. Each run SELF-LOOPS, pinging /warm every 60s for ~14 minutes. So a single
+#      launched run keeps the service awake across the whole idle window on its own,
+#      even if the next several scheduled runs are delayed or dropped by GitHub.
+#   3. Overlapping runs are harmless: /warm is throttled server-side, so redundant
+#      pings return "fresh" instantly.
+# This keeps the instance awake AND the House/Senate vote indexes hot in cache, so
+# real visitors are served from warm cache instead of waiting on a cold rebuild.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+# No repo token needed: the job only makes an outbound curl.
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Keep instance awake + vote indexes hot (~14 min self-loop)
+        run: |
+          URL="https://howdoesmyrepvote-api.onrender.com/warm"
+          END=$((SECONDS + 840))   # loop ~14 min, just under Render's 15-min idle timeout
+          n=0
+          until [ "$SECONDS" -ge "$END" ]; do
+            n=$((n + 1))
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              --max-time 120 --retry 2 --retry-delay 10 "$URL" || echo "000")
+            echo "ping #$n -> HTTP $code at $(date -u +%H:%M:%S)Z"
+            [ "$SECONDS" -ge "$END" ] && break
+            sleep 60
+          done
