@@ -1358,3 +1358,104 @@ def test_votes_endpoint_briefing_context_allows_deeper_bounded_limit(monkeypatch
 def test_default_vote_scan_limits_cover_briefing_vote_depth():
     assert backend.HOUSE_VOTE_SCAN_LIMIT >= backend.MAX_ISSUE_BRIEFING_VOTES
     assert backend.SENATE_VOTE_SCAN_LIMIT >= backend.MAX_ISSUE_BRIEFING_VOTES
+
+
+def test_classify_issue_ignores_substring_false_positives():
+    # "epa" must not match inside "Department"; the bill is a spending measure.
+    vote = {
+        "bill": {"title": "Department of Homeland Security Appropriations Act", "type": "HR", "number": "7744"},
+        "description": "Department of Homeland Security Appropriations Act",
+    }
+    assert backend.classify_issue(vote) == "Budget, taxes & government spending"
+
+
+def test_classify_legislation_issue_prefers_gun_title_over_crime_area():
+    gun_bill = {
+        "title": "Gun Owner Registration Information Protection Act",
+        "type": "HR",
+        "number": "7678",
+        "policyArea": {"name": "Crime and Law Enforcement"},
+    }
+    assert backend.classify_legislation_issue(gun_bill) == "Second Amendment & gun policy"
+
+
+def test_classify_legislation_issue_uses_policy_area_for_acronym_titles():
+    # Acronym title has no matchable keyword; the CRS policy area carries the signal.
+    crime_bill = {"title": "Logan's Law", "type": "HR", "number": "8611", "policyArea": {"name": "Crime and Law Enforcement"}}
+    assert backend.classify_legislation_issue(crime_bill) == "Crime & public safety"
+
+    foreign_bill = {"title": "MEGOBARI Act", "type": "HR", "number": "36", "policyArea": {"name": "International Affairs"}}
+    assert backend.classify_legislation_issue(foreign_bill) == "Defense, veterans & foreign policy"
+
+
+def _issue_legislation_congress_stub(sponsored, cosponsored):
+    def stub(endpoint, **params):
+        if "sponsored-legislation" in endpoint and "cosponsored" not in endpoint:
+            return {"sponsoredLegislation": sponsored}
+        if "cosponsored-legislation" in endpoint:
+            return {"cosponsoredLegislation": cosponsored}
+        return {"error": "unexpected endpoint", "statusCode": 500}
+    return stub
+
+
+def test_issue_legislation_endpoint_groups_and_ranks_sponsored_first(monkeypatch):
+    sponsored = [
+        {"type": "HR", "number": "5508", "title": "Respect for the Second Amendment Act",
+         "policyArea": {"name": "Crime and Law Enforcement"}, "introducedDate": "2025-09-01", "url": "u1"},
+        {"type": "HR", "number": "7048", "title": "No Funding for Sanctuary Cities Act",
+         "policyArea": {"name": "Immigration"}, "introducedDate": "2025-08-01", "url": "u2"},
+    ]
+    cosponsored = [
+        {"type": "HR", "number": "7678", "title": "Gun Owner Registration Information Protection Act",
+         "policyArea": {"name": "Crime and Law Enforcement"}, "introducedDate": "2025-07-01", "url": "u3"},
+        # Duplicate of a sponsored bill should be de-duplicated.
+        {"type": "HR", "number": "5508", "title": "Respect for the Second Amendment Act",
+         "policyArea": {"name": "Crime and Law Enforcement"}, "introducedDate": "2025-09-01", "url": "u1"},
+    ]
+    monkeypatch.setattr(backend, "congress_get", _issue_legislation_congress_stub(sponsored, cosponsored))
+
+    client = backend.app.test_client()
+    response = client.get("/member/P000048/issue-legislation")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    guns = data["legislationByIssue"]["Second Amendment & gun policy"]
+    assert [entry["number"] for entry in guns] == ["5508", "7678"]
+    assert guns[0]["role"] == "sponsored"
+    assert data["counts"]["Second Amendment & gun policy"] == 2
+    assert "Immigration & border" in data["legislationByIssue"]
+
+
+def test_issue_legislation_endpoint_handles_member_without_records(monkeypatch):
+    monkeypatch.setattr(backend, "congress_get", _issue_legislation_congress_stub([], []))
+
+    client = backend.app.test_client()
+    response = client.get("/member/N000001/issue-legislation")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["legislationByIssue"] == {}
+    assert data["counts"] == {}
+
+
+def test_issue_legislation_endpoint_survives_missing_cosponsored_list(monkeypatch):
+    sponsored = [
+        {"type": "HR", "number": "5508", "title": "Respect for the Second Amendment Act",
+         "policyArea": {"name": "Crime and Law Enforcement"}, "introducedDate": "2025-09-01", "url": "u1"},
+    ]
+
+    def stub(endpoint, **params):
+        if "cosponsored-legislation" in endpoint:
+            return {"error": "Congress.gov API request failed", "statusCode": 502}
+        if "sponsored-legislation" in endpoint:
+            return {"sponsoredLegislation": sponsored}
+        return {"error": "unexpected", "statusCode": 500}
+
+    monkeypatch.setattr(backend, "congress_get", stub)
+
+    client = backend.app.test_client()
+    response = client.get("/member/P000048/issue-legislation")
+    data = response.get_json()
+
+    assert response.status_code == 200
+    assert data["counts"]["Second Amendment & gun policy"] == 1

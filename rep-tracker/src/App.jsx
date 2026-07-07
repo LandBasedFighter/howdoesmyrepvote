@@ -248,6 +248,15 @@ function formatBillMeta(bill) {
   return parts.filter(Boolean)
 }
 
+function formatLegislationMeta(bill, official) {
+  const parts = []
+  if (official) parts.push(officialDisplayName(official))
+  if (bill.type && bill.number) parts.push(`${bill.type} ${bill.number}`)
+  if (bill.introducedDate) parts.push(`introduced ${formatDateOnly(bill.introducedDate)}`)
+  if (bill.policyArea) parts.push(bill.policyArea)
+  return parts.filter(Boolean)
+}
+
 function formatDateOnly(value) {
   if (!value) return ""
   if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10)
@@ -351,7 +360,22 @@ function compareBriefingVotes(left, right) {
   return rightScore[2].localeCompare(leftScore[2])
 }
 
-function buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials) {
+function legislationForIssue(issueKey, issueLegislationByMember, officials) {
+  const wantKeys = new Set(issueMatchKeys(issueKey))
+  const entries = officials.flatMap(official => {
+    const byIssue = issueLegislationByMember[official.bioguideId] || {}
+    return Object.entries(byIssue)
+      .filter(([issueLabel]) => wantKeys.has(String(issueLabel || "").trim().toLowerCase()))
+      .flatMap(([, bills]) => (bills || []).map(bill => ({ bill, official })))
+  })
+  return entries.sort((left, right) => {
+    const leftRank = left.bill.role === "sponsored" ? 0 : 1
+    const rightRank = right.bill.role === "sponsored" ? 0 : 1
+    return leftRank - rightRank
+  })
+}
+
+function buildIssueBriefingCards(selectedIssues, issueVotesByMember, issueLegislationByMember, officials) {
   return selectedIssues.map(issueKey => {
     const matchKeys = new Set(issueMatchKeys(issueKey))
     const matches = officials.flatMap(official => {
@@ -361,11 +385,15 @@ function buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials) 
         .map(vote => ({ vote, official }))
     }).sort(compareBriefingVotes)
 
+    const legislation = legislationForIssue(issueKey, issueLegislationByMember, officials)
+
     return {
       issueKey,
       label: issueLabel(issueKey),
       matches,
       topMatch: matches[0],
+      legislation,
+      topLegislation: legislation[0],
     }
   })
 }
@@ -504,19 +532,19 @@ function VoteCard({ vote, displayName, selectedIssues }) {
   )
 }
 
-function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading, error, requestKey, dataKey }) {
+function IssueBriefing({ selectedIssues, officials, issueVotesByMember, issueLegislationByMember, loading, error, requestKey, dataKey }) {
   if (!selectedIssues.length || !officials.length) return null
   if (dataKey !== requestKey) return null
   if (loading && Object.keys(issueVotesByMember).length === 0) return null
 
-  const cards = buildIssueBriefingCards(selectedIssues, issueVotesByMember, officials)
+  const cards = buildIssueBriefingCards(selectedIssues, issueVotesByMember, issueLegislationByMember || {}, officials)
 
   return (
     <section className="issue-briefing" aria-label="your issue briefing">
       <div className="issue-briefing-header">
         <div>
           <h2>your issue briefing</h2>
-          <p>recent roll-call snapshot.</p>
+          <p>recent floor votes, with bills they've backed when there's no recent vote.</p>
         </div>
         {loading && <span className="issue-briefing-status">checking recent votes</span>}
       </div>
@@ -529,11 +557,20 @@ function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading,
           const headline = vote?.voterContext?.headline || vote?.description || "Vote details unavailable"
           const impact = vote?.voterContext?.impact || vote?.interpretation?.summary
 
+          const legislation = card.topLegislation
+          const legBill = legislation?.bill
+          const legOfficial = legislation?.official
+
+          let countLabel = matchCountLabel(card.matches.length)
+          if (!topMatch && legBill) {
+            countLabel = card.legislation.length === 1 ? "1 bill they've backed" : `${card.legislation.length} bills they've backed`
+          }
+
           return (
             <article key={card.issueKey} className="issue-briefing-card">
               <div className="issue-briefing-card-header">
                 <h3>{card.label}</h3>
-                <span>{matchCountLabel(card.matches.length)}</span>
+                <span>{countLabel}</span>
               </div>
               {topMatch ? (
                 <>
@@ -547,8 +584,19 @@ function IssueBriefing({ selectedIssues, officials, issueVotesByMember, loading,
                     {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
                   </div>
                 </>
+              ) : legBill ? (
+                <>
+                  <span className={`vote-kind vote-kind-${legBill.role === "sponsored" ? "policy" : "procedural"}`}>
+                    {legBill.role === "sponsored" ? "sponsored bill" : "cosponsored bill"}
+                  </span>
+                  <div className="detail-title">{legBill.title}</div>
+                  <p className="vote-impact">no recent floor vote on this issue — this is legislation {officialDisplayName(legOfficial)} has backed.</p>
+                  <div className="detail-meta">
+                    {formatLegislationMeta(legBill, legOfficial).map(part => <span key={part}>{part}</span>)}
+                  </div>
+                </>
               ) : (
-                <p className="issue-briefing-empty">no exact recent vote found yet. try policy profile for broader signals.</p>
+                <p className="issue-briefing-empty">no recent floor vote or backed bill on this issue yet. try policy profile for broader signals.</p>
               )}
             </article>
           )
@@ -566,6 +614,10 @@ function MemberCard({ member, selectedIssues }) {
   const [expandedType, setExpandedType] = useState("")
   const [memberError, setMemberError] = useState("")
   const [detailsNote, setDetailsNote] = useState("")
+  const [showSkeleton, setShowSkeleton] = useState(false)
+  const skeletonTimer = useRef(null)
+
+  useEffect(() => () => clearTimeout(skeletonTimer.current), [])
 
   async function fetchMemberDetails(type) {
     if (expandedType === type) {
@@ -576,6 +628,9 @@ function MemberCard({ member, selectedIssues }) {
     setLoadingType(type)
     setMemberError("")
     setDetailsNote("")
+    setShowSkeleton(false)
+    clearTimeout(skeletonTimer.current)
+    skeletonTimer.current = setTimeout(() => setShowSkeleton(true), 240)
     try {
       const endpoint = type === "votes" ? "votes" : "legislation"
       const detailEndpoint = type === "profile" ? "stance" : endpoint
@@ -597,6 +652,8 @@ function MemberCard({ member, selectedIssues }) {
     } catch {
       setMemberError("Could not load member details from the local API.")
     } finally {
+      clearTimeout(skeletonTimer.current)
+      setShowSkeleton(false)
       setLoadingType("")
     }
   }
@@ -637,7 +694,7 @@ function MemberCard({ member, selectedIssues }) {
 
       {memberError && <p className="inline-error">{memberError}</p>}
       {detailsNote && expandedType === "votes" && <p className="detail-note">{detailsNote}</p>}
-      {loadingType && <DetailSkeletonList label={`Loading ${loadingType}`} />}
+      {loadingType && showSkeleton && <DetailSkeletonList label={`Loading ${loadingType}`} />}
 
       {!loadingType && expandedType === "profile" && profile && (
         <div className="details-panel">
@@ -737,6 +794,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [issueVotesByMember, setIssueVotesByMember] = useState({})
+  const [issueLegislationByMember, setIssueLegislationByMember] = useState({})
   const [issueBriefingLoading, setIssueBriefingLoading] = useState(false)
   const [issueBriefingError, setIssueBriefingError] = useState("")
   const [issueBriefingDataKey, setIssueBriefingDataKey] = useState("")
@@ -783,6 +841,7 @@ function App() {
     async function loadIssueBriefingVotes() {
       setIssueBriefingLoading(true)
       setIssueBriefingError("")
+      setIssueLegislationByMember({})
       try {
         const results = await Promise.allSettled(currentOfficials.map(async official => {
           const res = await fetch(`${API_BASE_URL}/member/${official.bioguideId}/votes?context=briefing&limit=${ISSUE_BRIEFING_VOTE_LIMIT}`)
@@ -813,6 +872,26 @@ function App() {
         }
       } finally {
         if (!cancelled) setIssueBriefingLoading(false)
+      }
+
+      // Sponsored/cosponsored legislation is a secondary signal used to fill in
+      // issues that have no recent floor vote. Load it after votes so it never
+      // blocks the primary briefing, and fail silently if it is unavailable.
+      try {
+        const legResults = await Promise.allSettled(currentOfficials.map(async official => {
+          const res = await fetch(`${API_BASE_URL}/member/${official.bioguideId}/issue-legislation`)
+          const json = await res.json()
+          if (json.error) throw new Error(json.error)
+          return [official.bioguideId, json.legislationByIssue || {}]
+        }))
+        if (!cancelled) {
+          const legEntries = legResults
+            .filter(result => result.status === "fulfilled")
+            .map(result => result.value)
+          setIssueLegislationByMember(Object.fromEntries(legEntries))
+        }
+      } catch {
+        if (!cancelled) setIssueLegislationByMember({})
       }
     }
 
@@ -1024,6 +1103,7 @@ function App() {
               selectedIssues={selectedIssues}
               officials={officials}
               issueVotesByMember={issueVotesByMember}
+              issueLegislationByMember={issueLegislationByMember}
               loading={issueBriefingLoading}
               error={issueBriefingError}
               requestKey={issueBriefingRequestKey}

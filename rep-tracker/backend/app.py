@@ -22,6 +22,8 @@ GEMINI_TIMEOUT_SECONDS = int(os.getenv("GEMINI_TIMEOUT_SECONDS", "30"))
 MAX_LEGISLATION = 5
 MAX_VOTES = 10
 MAX_ISSUE_BRIEFING_VOTES = int(os.getenv("MAX_ISSUE_BRIEFING_VOTES", "40"))
+MEMBER_LEGISLATION_SCAN_LIMIT = int(os.getenv("MEMBER_LEGISLATION_SCAN_LIMIT", "250"))
+MAX_ISSUE_LEGISLATION_ITEMS = int(os.getenv("MAX_ISSUE_LEGISLATION_ITEMS", "6"))
 HOUSE_VOTE_SCAN_LIMIT = max(int(os.getenv("HOUSE_VOTE_SCAN_LIMIT", "40")), MAX_ISSUE_BRIEFING_VOTES)
 HOUSE_VOTE_WORKERS = int(os.getenv("HOUSE_VOTE_WORKERS", "6"))
 MEMBER_LOOKUP_WORKERS = int(os.getenv("MEMBER_LOOKUP_WORKERS", "12"))
@@ -485,9 +487,14 @@ ISSUE_TAXONOMY = {
     ),
     "Second Amendment & gun policy": (
         "second amendment", "gun", "firearm", "concealed carry", "ammunition", "background check",
+        "handgun", "rifle", "shotgun", "silencer", "suppressor", "assault weapon", "red flag",
+        "ghost gun", "national firearms act", "hunting", "sportsmen", "sportsman",
     ),
     "Crime & public safety": (
-        "crime", "police", "policing", "law enforcement", "public safety", "sentencing", "victim",
+        "crime", "criminal", "police", "policing", "law enforcement", "public safety", "sentencing",
+        "victim", "fentanyl", "trafficking", "cartel", "gang", "homicide", "robbery", "smuggling",
+        "controlled substance", "opioid", "overdose", "bail", "prison", "incarceration", "felony",
+        "prosecut", "sheriff",
     ),
     "Election rules": (
         "election", "voting", "voter", "ballot", "campaign finance", "polling place",
@@ -509,7 +516,11 @@ ISSUE_TAXONOMY = {
         "military", "ambassador", "foreign", "state department",
     ),
     "Housing & homeownership": ("housing", "homeownership", "homeowner", "mortgage", "rent", "zoning"),
-    "Immigration & border": ("immigration", "border", "asylum", "deport", "visa", "alien"),
+    "Immigration & border": (
+        "immigration", "border", "asylum", "deport", "visa", "alien", "migrant", "sanctuary",
+        "temporary protected status", "customs enforcement", "immigration enforcement",
+        "port of entry", "undocumented", "unlawful presence",
+    ),
     "Budget, taxes & government spending": (
         "appropriations", "budget", "tax", "spending", "debt", "revenue", "fiscal", "deficit",
     ),
@@ -525,6 +536,19 @@ ISSUE_TAXONOMY = {
 }
 
 LOW_INFORMATION_ISSUES = {"Federal courts & nominations"}
+
+# Congress.gov CRS "policyArea" subjects that don't already contain a taxonomy
+# keyword in their name. Used as a fallback when a sponsored/cosponsored bill's
+# title carries no matchable term of its own.
+POLICY_AREA_ISSUE = {
+    "International Affairs": "Defense, veterans & foreign policy",
+    "Foreign Trade and International Finance": "Defense, veterans & foreign policy",
+    "Science, Technology, Communications": "Free speech & online safety",
+    "Commerce": "Cost of living & consumer rules",
+    "Finance and Financial Sector": "Cost of living & consumer rules",
+    "Economics and Public Finance": "Budget, taxes & government spending",
+    "Government Operations and Politics": "Federal agency rules & oversight",
+}
 
 
 def bill_text(vote):
@@ -556,6 +580,23 @@ def references_hconres_86_iran_war(vote):
     return "h.con.res. 86" in text or "hconres 86" in text
 
 
+_ISSUE_TERM_PATTERNS = {}
+
+
+def _issue_term_pattern(term):
+    pattern = _ISSUE_TERM_PATTERNS.get(term)
+    if pattern is None:
+        cleaned = term.strip()
+        prefix = r"(?<![a-z0-9])" if cleaned[:1].isalnum() else ""
+        pattern = re.compile(prefix + re.escape(cleaned))
+        _ISSUE_TERM_PATTERNS[term] = pattern
+    return pattern
+
+
+def issue_term_matches(term, text):
+    return bool(_issue_term_pattern(term).search(text))
+
+
 def classify_issue(vote, context_text=None):
     text = " ".join(part for part in [vote_text(vote), str(context_text or "")] if part).lower()
     bill = vote.get("bill") or {}
@@ -565,7 +606,7 @@ def classify_issue(vote, context_text=None):
     if references_hconres_86_iran_war(vote):
         return "Defense, veterans & foreign policy"
     for issue, terms in ISSUE_TAXONOMY.items():
-        if any(term in text for term in terms):
+        if any(issue_term_matches(term, text) for term in terms):
             return issue
     return "Other recent policy"
 
@@ -1810,6 +1851,100 @@ def get_member_legislation(bioguide_id):
         return {"bills": bills}
 
     data = cached(("legislation", bioguide_id, limit), fetch_legislation)
+    status = data.get("statusCode", 502) if data.get("error") else 200
+    return jsonify(data), status
+
+
+def legislation_policy_area(item):
+    area = item.get("policyArea")
+    if isinstance(area, dict):
+        area = area.get("name")
+    return area or ""
+
+
+def classify_legislation_issue(item):
+    title = item.get("title") or item.get("latestTitle") or ""
+    area = legislation_policy_area(item)
+    pseudo_vote = {"description": title, "bill": {"title": title, "type": item.get("type")}}
+    issue = classify_issue(pseudo_vote, area)
+    if issue == "Other recent policy":
+        issue = POLICY_AREA_ISSUE.get(area, issue)
+    return issue
+
+
+def normalize_issue_legislation(item, role):
+    return {
+        "type": item.get("type"),
+        "number": item.get("number"),
+        "title": item.get("title") or item.get("latestTitle"),
+        "url": item.get("url"),
+        "policyArea": legislation_policy_area(item) or None,
+        "introducedDate": item.get("introducedDate"),
+        "latestAction": item.get("latestAction"),
+        "role": role,
+    }
+
+
+def fetch_member_legislation_list(bioguide_id, kind, list_key, cap):
+    data = congress_get(f"member/{bioguide_id}/{kind}", limit=min(250, cap))
+    if data.get("error"):
+        return data
+    return {"items": data.get(list_key, [])[:cap]}
+
+
+def build_member_issue_legislation(bioguide_id):
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        sponsored_future = executor.submit(
+            fetch_member_legislation_list,
+            bioguide_id, "sponsored-legislation", "sponsoredLegislation", MEMBER_LEGISLATION_SCAN_LIMIT,
+        )
+        cosponsored_future = executor.submit(
+            fetch_member_legislation_list,
+            bioguide_id, "cosponsored-legislation", "cosponsoredLegislation", MEMBER_LEGISLATION_SCAN_LIMIT,
+        )
+        sponsored = sponsored_future.result()
+        cosponsored = cosponsored_future.result()
+    if sponsored.get("error"):
+        return sponsored
+    # A missing cosponsored list should not sink the sponsored signal.
+    cosponsored_items = [] if cosponsored.get("error") else cosponsored["items"]
+
+    by_issue = {}
+    counts = {}
+    seen = set()
+    ranked = (
+        [("sponsored", item) for item in sponsored["items"]]
+        + [("cosponsored", item) for item in cosponsored_items]
+    )
+    for role, item in ranked:
+        title = item.get("title") or item.get("latestTitle")
+        if not title:
+            continue
+        dedup_key = (str(item.get("type") or "").strip().lower(), str(item.get("number") or "").strip())
+        if dedup_key in seen:
+            continue
+        issue = classify_legislation_issue(item)
+        if issue == "Other recent policy":
+            continue
+        seen.add(dedup_key)
+        counts[issue] = counts.get(issue, 0) + 1
+        entries = by_issue.setdefault(issue, [])
+        if len(entries) < MAX_ISSUE_LEGISLATION_ITEMS:
+            entries.append(normalize_issue_legislation(item, role))
+
+    return {
+        "legislationByIssue": by_issue,
+        "counts": counts,
+        "source": "congress.gov sponsored & cosponsored legislation",
+    }
+
+
+@app.route("/member/<bioguide_id>/issue-legislation")
+def get_member_issue_legislation(bioguide_id):
+    data = cached(
+        ("issue-legislation", bioguide_id, MEMBER_LEGISLATION_SCAN_LIMIT, MAX_ISSUE_LEGISLATION_ITEMS),
+        lambda: build_member_issue_legislation(bioguide_id),
+    )
     status = data.get("statusCode", 502) if data.get("error") else 200
     return jsonify(data), status
 
