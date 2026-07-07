@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
-from threading import Lock
+from threading import Lock, Thread
 from time import monotonic, sleep
 from urllib.parse import quote, urlparse
 import xml.etree.ElementTree as ET
@@ -105,6 +105,17 @@ CORS(app, origins=CORS_ORIGINS)
 _session = requests.Session()
 _cache = {}
 _cache_lock = Lock()
+_key_locks = {}
+_key_locks_lock = Lock()
+
+
+def _get_key_lock(cache_key):
+    with _key_locks_lock:
+        lock = _key_locks.get(cache_key)
+        if lock is None:
+            lock = Lock()
+            _key_locks[cache_key] = lock
+        return lock
 
 
 def get_api_key():
@@ -125,12 +136,23 @@ def cached(cache_key, fetcher, ttl=CACHE_TTL_SECONDS, should_cache=None):
         if entry and entry["expires_at"] > now:
             return entry["value"]
 
-    value = fetcher()
-    cacheable = should_cache(value) if should_cache else not (isinstance(value, dict) and value.get("error"))
-    if cacheable:
+    # Single-flight: only one builder runs per key. Concurrent callers block here,
+    # then reuse the freshly built value instead of duplicating expensive fetches
+    # (e.g. two votes requests both triggering a full house-vote-index rebuild).
+    key_lock = _get_key_lock(cache_key)
+    with key_lock:
+        now = monotonic()
         with _cache_lock:
-            _cache[cache_key] = {"value": value, "expires_at": now + ttl}
-    return value
+            entry = _cache.get(cache_key)
+            if entry and entry["expires_at"] > now:
+                return entry["value"]
+
+        value = fetcher()
+        cacheable = should_cache(value) if should_cache else not (isinstance(value, dict) and value.get("error"))
+        if cacheable:
+            with _cache_lock:
+                _cache[cache_key] = {"value": value, "expires_at": monotonic() + ttl}
+        return value
 
 
 def clear_cache():
@@ -1804,6 +1826,24 @@ def get_member_stance(bioguide_id):
     data = cached(("stance", bioguide_id, limit), fetch_stance, should_cache=should_cache_stance)
     status = data.get("statusCode", 502) if data.get("error") else 200
     return jsonify(data), status
+
+
+def warm_vote_indexes():
+    """Pre-build the vote indexes so the first user request is served from cache
+    instead of waiting on a full multi-second scan of upstream roll-call data."""
+    for build in (house_vote_index, senate_vote_index):
+        try:
+            build()
+        except Exception:
+            pass
+
+
+def _maybe_warm_on_start():
+    if os.getenv("WARM_CACHE_ON_START", "false").strip().lower() == "true":
+        Thread(target=warm_vote_indexes, name="warm-vote-indexes", daemon=True).start()
+
+
+_maybe_warm_on_start()
 
 
 if __name__ == "__main__":
