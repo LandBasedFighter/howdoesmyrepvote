@@ -105,6 +105,7 @@ CORS(app, origins=CORS_ORIGINS)
 _session = requests.Session()
 _cache = {}
 _cache_lock = Lock()
+_boot_monotonic = monotonic()
 _key_locks = {}
 _key_locks_lock = Lock()
 
@@ -1683,6 +1684,24 @@ def handle_runtime_error(error):
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/debug/state")
+def debug_state():
+    with _cache_lock:
+        keys = [repr(k) for k in _cache.keys()]
+    return jsonify({
+        "pid": os.getpid(),
+        "uptime_s": round(monotonic() - _boot_monotonic, 1),
+        "warm_on_start": os.getenv("WARM_CACHE_ON_START", "false"),
+        "cache_ttl_s": CACHE_TTL_SECONDS,
+        "request_timeout_s": REQUEST_TIMEOUT_SECONDS,
+        "house_vote_workers": HOUSE_VOTE_WORKERS,
+        "house_vote_scan_limit": HOUSE_VOTE_SCAN_LIMIT,
+        "cache_key_count": len(keys),
+        "key_lock_count": len(_key_locks),
+        "cache_keys": keys[:60],
+    })
 
 
 @app.route("/representatives")

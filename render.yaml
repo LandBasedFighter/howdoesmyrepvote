@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: .
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --chdir rep-tracker/backend app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120
+    startCommand: gunicorn --chdir rep-tracker/backend app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 240
     healthCheckPath: /health
     autoDeploy: true
     envVars:
@@ -14,7 +14,7 @@ services:
       - key: CORS_ORIGINS
         value: https://howdoesmyrepvote.us
       - key: WARM_CACHE_ON_START
-        value: "true"
+        value: "false"
       - key: CACHE_TTL_SECONDS
         value: "3600"
       - key: CONGRESS_CIVIC_API_KEY
