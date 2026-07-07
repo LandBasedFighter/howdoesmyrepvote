@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
-from threading import Lock, Thread
+from threading import Lock
 from time import monotonic, sleep
 from urllib.parse import quote, urlparse
 import xml.etree.ElementTree as ET
@@ -105,7 +105,6 @@ CORS(app, origins=CORS_ORIGINS)
 _session = requests.Session()
 _cache = {}
 _cache_lock = Lock()
-_boot_monotonic = monotonic()
 _key_locks = {}
 _key_locks_lock = Lock()
 
@@ -1686,24 +1685,6 @@ def health():
     return jsonify({"status": "ok"})
 
 
-@app.route("/debug/state")
-def debug_state():
-    with _cache_lock:
-        keys = [repr(k) for k in _cache.keys()]
-    return jsonify({
-        "pid": os.getpid(),
-        "uptime_s": round(monotonic() - _boot_monotonic, 1),
-        "warm_on_start": os.getenv("WARM_CACHE_ON_START", "false"),
-        "cache_ttl_s": CACHE_TTL_SECONDS,
-        "request_timeout_s": REQUEST_TIMEOUT_SECONDS,
-        "house_vote_workers": HOUSE_VOTE_WORKERS,
-        "house_vote_scan_limit": HOUSE_VOTE_SCAN_LIMIT,
-        "cache_key_count": len(keys),
-        "key_lock_count": len(_key_locks),
-        "cache_keys": keys[:60],
-    })
-
-
 @app.route("/representatives")
 def get_representatives():
     return jsonify({"representatives": current_house_member_options()})
@@ -1845,24 +1826,6 @@ def get_member_stance(bioguide_id):
     data = cached(("stance", bioguide_id, limit), fetch_stance, should_cache=should_cache_stance)
     status = data.get("statusCode", 502) if data.get("error") else 200
     return jsonify(data), status
-
-
-def warm_vote_indexes():
-    """Pre-build the vote indexes so the first user request is served from cache
-    instead of waiting on a full multi-second scan of upstream roll-call data."""
-    for build in (house_vote_index, senate_vote_index):
-        try:
-            build()
-        except Exception:
-            pass
-
-
-def _maybe_warm_on_start():
-    if os.getenv("WARM_CACHE_ON_START", "false").strip().lower() == "true":
-        Thread(target=warm_vote_indexes, name="warm-vote-indexes", daemon=True).start()
-
-
-_maybe_warm_on_start()
 
 
 if __name__ == "__main__":

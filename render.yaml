@@ -13,8 +13,6 @@ services:
         value: "3.13"
       - key: CORS_ORIGINS
         value: https://howdoesmyrepvote.us
-      - key: WARM_CACHE_ON_START
-        value: "false"
       - key: CACHE_TTL_SECONDS
         value: "3600"
       - key: CONGRESS_CIVIC_API_KEY
