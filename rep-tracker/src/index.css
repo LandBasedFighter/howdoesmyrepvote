@@ -849,6 +849,22 @@ h3 {
   text-transform: uppercase;
 }
 
+.vote-source-link {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--accent-dark);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+.vote-source-link:hover,
+.vote-source-link:focus-visible {
+  text-decoration: underline;
+}
+
 .latest-action {
   margin-top: 8px;
   color: var(--text);

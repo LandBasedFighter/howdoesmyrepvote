@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 
+import { voteSourceUrl } from "./votes.js"
+
 const ITEMS_PER_PAGE = 5
 const ISSUE_BRIEFING_VOTE_LIMIT = 40
 const DEFAULT_API_HOST = typeof window === "undefined" ? "localhost" : window.location.hostname || "localhost"
@@ -510,6 +512,7 @@ function VoteCard({ vote, displayName, selectedIssues }) {
   const impact = context?.impact || vote.interpretation?.summary
   const result = context?.resultLabel || vote.result
   const priorityLabel = priorityMatchLabel(vote, selectedIssues)
+  const sourceUrl = voteSourceUrl(vote)
 
   return (
     <li className={`detail-item vote-card ${context ? "vote-card-contextual" : ""}`}>
@@ -528,6 +531,17 @@ function VoteCard({ vote, displayName, selectedIssues }) {
       <div className="detail-meta">
         {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
       </div>
+      {sourceUrl && (
+        <a
+          className="vote-source-link"
+          href={sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          view official roll call
+          <span aria-hidden="true"> ↗</span>
+        </a>
+      )}
     </li>
   )
 }

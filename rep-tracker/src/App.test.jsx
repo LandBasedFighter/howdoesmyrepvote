@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import App from './App.jsx'
+import { voteSourceUrl } from './votes.js'
 
 afterEach(() => {
   cleanup()
@@ -350,6 +351,11 @@ describe('App', () => {
     expect(screen.getByText('Passed')).toBeInTheDocument()
     expect(screen.getByText('Healthcare · Policy vote · roll call 74 · HR 6329')).toBeInTheDocument()
     expect(screen.queryByText('Policy vote')).not.toBeInTheDocument()
+
+    const rollCallLink = screen.getByRole('link', { name: /view official roll call/i })
+    expect(rollCallLink).toHaveAttribute('href', 'https://clerk.house.gov/Votes/2026074')
+    expect(rollCallLink).toHaveAttribute('target', '_blank')
+    expect(rollCallLink).toHaveAttribute('rel', 'noopener noreferrer')
 
     // Verify DOM order: title, impact, position/result, metadata
     const voteCard = screen.getByText('Veterans Health Care Improvement Act').closest('li')
@@ -1048,5 +1054,57 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: 'github' })).toHaveAttribute('href', 'https://github.com/LandBasedFighter')
     expect(screen.getByRole('link', { name: 'linkedin' })).toHaveAttribute('href', 'https://www.linkedin.com/in/morgan-guinyard-6304a1284/')
     expect(screen.getByRole('link', { name: 'register to vote' })).toHaveAttribute('href', 'https://vote.gov')
+  })
+})
+
+describe('voteSourceUrl', () => {
+  it('builds a Clerk of the House roll-call link for House votes', () => {
+    expect(voteSourceUrl({
+      chamber: 'House',
+      source: 'congress.gov',
+      congress: 119,
+      session: 1,
+      rollCall: 240,
+      date: '2025-09-08T18:56:00-04:00',
+    })).toBe('https://clerk.house.gov/Votes/2025240')
+  })
+
+  it('zero-pads House roll-call numbers to three digits', () => {
+    expect(voteSourceUrl({
+      chamber: 'House',
+      rollCall: '5',
+      date: '2025-01-15T10:00:00-05:00',
+    })).toBe('https://clerk.house.gov/Votes/2025005')
+  })
+
+  it('falls back to the congress.gov source when chamber is absent', () => {
+    expect(voteSourceUrl({
+      source: 'congress.gov',
+      rollCall: '74',
+      date: '2026-01-01T12:00:00-05:00',
+    })).toBe('https://clerk.house.gov/Votes/2026074')
+  })
+
+  it('builds a senate.gov roll-call link for Senate votes', () => {
+    expect(voteSourceUrl({
+      chamber: 'Senate',
+      source: 'senate.gov',
+      congress: '119',
+      session: '1',
+      rollCall: '7',
+      date: '2025-03-04T13:00:00-05:00',
+    })).toBe('https://www.senate.gov/legislative/LIS/roll_call_votes/vote1191/vote_119_1_00007.htm')
+  })
+
+  it('returns null when the roll-call number is missing', () => {
+    expect(voteSourceUrl({ chamber: 'House', date: '2025-09-08T00:00:00-04:00' })).toBeNull()
+  })
+
+  it('returns null for House votes without a usable date year', () => {
+    expect(voteSourceUrl({ chamber: 'House', rollCall: '12', date: '' })).toBeNull()
+  })
+
+  it('returns null for Senate votes missing congress or session', () => {
+    expect(voteSourceUrl({ chamber: 'Senate', rollCall: '7', congress: '119' })).toBeNull()
   })
 })
