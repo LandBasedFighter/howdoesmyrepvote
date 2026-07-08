@@ -1,19 +1,23 @@
 name: keep-warm
 
 # Render's free tier spins a web service down after ~15 minutes with no traffic,
-# then charges a ~50s cold start on the next visit. A single scheduled ping is NOT
-# enough: GitHub's cron scheduler is best-effort and routinely delays or drops runs
-# (observed ~1 run firing in 100 minutes), which let the instance fall asleep.
+# then charges a ~50s cold start on the next visit. GitHub's cron scheduler is
+# best-effort and routinely delays or DROPS runs: with a "*/5" schedule we observed
+# GitHub actually launching a run only about once every 1.5-3.4 hours, not every
+# 5 minutes. A short (~14 min) self-loop therefore left the service asleep for the
+# ~75-190 minute gaps between the runs GitHub actually launched.
 #
 # Hardening strategy (safe here because this is a PUBLIC repo -> unlimited free
 # Actions minutes):
-#   1. Schedule frequently (every 5 min) to maximize the chance GitHub actually
-#      launches a run inside any given 15-minute window.
-#   2. Each run SELF-LOOPS, pinging /warm every 60s for ~14 minutes. So a single
-#      launched run keeps the service awake across the whole idle window on its own,
-#      even if the next several scheduled runs are delayed or dropped by GitHub.
-#   3. Overlapping runs are harmless: /warm is throttled server-side, so redundant
-#      pings return "fresh" instantly.
+#   1. Keep a frequent schedule (every 5 min) to maximize the chance GitHub
+#      launches SOMETHING, since most ticks get dropped.
+#   2. Each launched run SELF-LOOPS for ~5.7 hours (just under GitHub's 6h job cap),
+#      pinging /warm every 4 min. One launched run now bridges the entire multi-hour
+#      gap until GitHub next launches one, so the service never falls asleep even
+#      when GitHub drops many scheduled ticks in a row.
+#   3. A concurrency group bounds this to ONE active run at a time. Extra launches
+#      queue as a single pending run (never cancelling the active one) and take over
+#      the instant the active run ends, giving continuous, gap-free coverage.
 # This keeps the instance awake AND the House/Senate vote indexes hot in cache, so
 # real visitors are served from warm cache instead of waiting on a cold rebuild.
 
@@ -25,21 +29,29 @@ on:
 # No repo token needed: the job only makes an outbound curl.
 permissions: {}
 
+# One active pinger at a time. cancel-in-progress: false means a newly launched run
+# waits (pending) for the active ~5.7h run to finish, then immediately takes over --
+# so coverage is continuous and runs never pile up. Superseded pending runs show as
+# "cancelled"; that is expected redundancy, not a failure.
+concurrency:
+  group: keep-warm
+  cancel-in-progress: false
+
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 350       # just under GitHub's 6h hosted-job cap
     steps:
-      - name: Keep instance awake + vote indexes hot (~14 min self-loop)
+      - name: Keep instance awake + vote indexes hot (~5.7h self-loop)
         run: |
           URL="https://howdoesmyrepvote-api.onrender.com/warm"
-          END=$((SECONDS + 840))   # loop ~14 min, just under Render's 15-min idle timeout
+          END=$((SECONDS + 20400))   # loop ~5h40m to bridge GitHub's unreliable scheduler
           n=0
           until [ "$SECONDS" -ge "$END" ]; do
             n=$((n + 1))
             code=$(curl -sS -o /dev/null -w '%{http_code}' \
-              --max-time 120 --retry 2 --retry-delay 10 "$URL" || echo "000")
+              --max-time 120 --retry 3 --retry-delay 10 "$URL" || echo "000")
             echo "ping #$n -> HTTP $code at $(date -u +%H:%M:%S)Z"
             [ "$SECONDS" -ge "$END" ] && break
-            sleep 60
+            sleep 240   # every 4 min, comfortably under Render's ~15-min idle timeout
           done
