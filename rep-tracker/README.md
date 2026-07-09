@@ -1,61 +1,32 @@
-# How Did Your Rep Vote?
+# how did your rep vote?
 
-A React and Flask app for looking up congressional representatives by address, then viewing recent House roll-call votes and sponsored legislation from Congress.gov.
+look up your members of congress by address, district, or name and see how they voted on recent house and senate roll calls, plus the bills they sponsored.
 
-## Project layout
+**live:** https://howdoesmyrepvote.us
 
-- `src\` - React frontend built with Vite.
-- `backend\app.py` - Flask API for geocoding addresses, finding members of Congress, caching upstream data, and fetching member votes/legislation.
-- `package.json` - frontend scripts and dependencies.
-- `..\requirements.txt` - backend Python dependencies.
+## overview
 
-## Requirements
+enter an address, district, or representative name to find your house member and senators. each member shows recent roll-call votes with plain-language context, sponsored and cosponsored bills, and an optional ai policy profile. all data comes from official government sources.
 
-- Node.js and npm
-- Python 3
-- A Congress.gov API key set as `CONGRESS_CIVIC_API_KEY`
+## architecture
 
-## Setup
+- **frontend** - react + vite static site on github pages (`https://howdoesmyrepvote.us`).
+- **backend** - flask api hosted separately so civic api keys stay server-side and rotate without a frontend rebuild. it geocodes addresses, resolves members, caches upstream data, and serves votes and legislation.
+- **data** - congress.gov (house roll calls), senate.gov roll-call xml, census geocoding, and optional google gemini for policy explanations.
+- **ci/cd** - frontend lint/test/build, backend pytest, github pages deploy, and a production api health check.
 
-Install frontend dependencies from `rep-tracker`:
+## configuration
 
-```bash
-npm install
-```
-
-Install backend dependencies from the repository root:
-
-```bash
-pip install -r requirements.txt
-```
-
-Copy example environment files and fill in the API key:
-
-```bash
-copy .env.example .env
-copy backend\.env.example backend\.env
-```
-
-## Live deployment
-
-- Frontend: `https://howdoesmyrepvote.us`
-- Backend API: configured at build time through the `PAGES_API_BASE_URL` GitHub secret.
-- Health check: `<PAGES_API_BASE_URL>/health`
-
-The frontend is a static Vite build hosted on GitHub Pages. The Flask backend is hosted separately so API keys remain server-side and can be rotated without rebuilding the frontend.
-
-## Configuration
-
-Frontend variables in `rep-tracker\.env`:
+frontend variables in `rep-tracker\.env`:
 
 ```env
 VITE_API_BASE_URL=http://localhost:5000
 VITE_PUBLIC_BASE_PATH=/
 ```
 
-For production GitHub Pages builds, set the repository secret `PAGES_API_BASE_URL` to the hosted Flask API origin. Do not include a trailing slash. The Pages workflow passes that value to Vite as `VITE_API_BASE_URL`.
+for production pages builds, set the repo secret `PAGES_API_BASE_URL` to the hosted api origin (no trailing slash). the workflow passes it to vite as `VITE_API_BASE_URL`.
 
-Backend variables in `rep-tracker\backend\.env`:
+backend variables in `rep-tracker\backend\.env`:
 
 ```env
 CONGRESS_CIVIC_API_KEY=your_api_key_here
@@ -75,75 +46,54 @@ GEMINI_ATTEMPTS=2
 STANCE_EVIDENCE_LIMIT=20
 ```
 
-For production, set `CORS_ORIGINS` to `https://howdoesmyrepvote.us` plus any temporary preview origins that need access. Avoid wildcard CORS in production.
+`*_SCAN_LIMIT` sets how many recent roll calls are scanned per chamber and session, `HOUSE_VOTE_WORKERS` sets concurrent house detail fetches, and `STANCE_EVIDENCE_LIMIT` caps votes sent to gemini. with a `GEMINI_API_KEY`, gemini flash writes a cautious, voter-facing policy summary; without one, the app says ai reasoning is unavailable. keep `CORS_ORIGINS` scoped to `https://howdoesmyrepvote.us` in production (no wildcards).
 
-House votes are loaded from Congress.gov roll-call data, and Senate votes are loaded from Senate.gov roll-call XML. The backend builds cached vote indexes, then reuses them for fast member lookups. `HOUSE_VOTE_SCAN_LIMIT` and `SENATE_VOTE_SCAN_LIMIT` control how many recent roll calls are scanned per chamber/session; `HOUSE_VOTE_WORKERS` controls concurrent House roll-call detail fetches; `STANCE_EVIDENCE_LIMIT` controls how many substantive policy votes are sent to Gemini for reasoning.
+## deployment
 
-Policy profiles use deterministic vote classification to select substantive evidence. If `GEMINI_API_KEY` is configured with a Google AI Studio key, the backend asks Gemini Flash to produce a cautious, voter-facing explanation from the classified evidence. Without a Gemini key, the app reports that AI reasoning is unavailable.
+the frontend is a static vite build on github pages. deploy the flask backend from `rep-tracker\backend` on any python host:
 
-## Running locally
+- working dir: `rep-tracker\backend`
+- install (from repo root): `pip install -r requirements.txt`
+- start: `python app.py`
+- health check: `/health`
+- secrets: `CONGRESS_CIVIC_API_KEY` (required), `GEMINI_API_KEY` (optional)
 
-Start the Flask API from `rep-tracker\backend`:
+then set the repo secret `PAGES_API_BASE_URL` to the backend origin and push to `master` (or run the `Deploy GitHub Pages` workflow) to rebuild the frontend against it.
 
-```bash
-python app.py
-```
-
-Start the Vite dev server from `rep-tracker`:
-
-```bash
-npm run dev
-```
-
-Useful API endpoints:
+## api reference
 
 - `GET /health`
 - `GET /representatives`
-- `POST /reps` with JSON `{ "address": "..." }` for address lookup, so addresses are not written to normal request logs as query strings
-- `POST /reps` with JSON `{ "lat": 40.75, "lon": -73.98 }` for browser "use my location" lookup, so coordinates are not written to normal request logs as query strings
+- `POST /reps` with `{ "address": "..." }` (address lookup; kept out of query-string logs)
+- `POST /reps` with `{ "lat": 40.75, "lon": -73.98 }` ("use my location"; kept out of query-string logs)
 - `GET /reps?state=NY&district=12`
 - `GET /reps?representative=Alexandria%20Ocasio-Cortez`
 - `GET /member/<bioguide_id>/votes`
 - `GET /member/<bioguide_id>/legislation`
 
-## Backend deployment recipe
+## local development
 
-Deploy the Flask API from `rep-tracker\backend` on a host that supports Python web services.
-
-Use these settings:
-
-- Working directory: `rep-tracker\backend`
-- Install command from repository root: `pip install -r requirements.txt`
-- Start command from `rep-tracker\backend`: `python app.py`
-- Health check path: `/health`
-- Required runtime secret: `CONGRESS_CIVIC_API_KEY`
-- Optional runtime secret: `GEMINI_API_KEY`
-- Production CORS origin: `https://howdoesmyrepvote.us`
-
-After the backend is hosted, set the GitHub repository secret `PAGES_API_BASE_URL` to the backend origin, such as the host-provided HTTPS URL. Push to `master` or run the `Deploy GitHub Pages` workflow manually to rebuild the frontend against that API.
-
-## Resume story
-
-This project demonstrates a production-ready full-stack civic data app:
-
-- React/Vite frontend deployed to GitHub Pages at `https://howdoesmyrepvote.us`.
-- Separately hosted Flask API with production CORS and server-side civic API keys.
-- Privacy-aware address lookup using `POST /reps`.
-- Congress.gov, Census geocoding, Senate.gov roll-call XML, and optional Gemini policy explanations.
-- Automated frontend lint/tests/build, backend pytest, GitHub Pages deploy, and production API health smoke check.
-
-## Checks
-
-Frontend checks from `rep-tracker`:
+needs node.js + npm, python 3, and a `CONGRESS_CIVIC_API_KEY`.
 
 ```bash
-npm run lint
-npm run build
-npm test
+npm install                      # from rep-tracker
+pip install -r requirements.txt  # from repo root
+copy .env.example .env
+copy backend\.env.example backend\.env
+python app.py                    # backend, from rep-tracker\backend
+npm run dev                      # frontend, from rep-tracker
 ```
 
-Backend tests from the repository root:
+checks:
 
 ```bash
-python -m pytest rep-tracker\backend
+npm run lint && npm run build && npm test   # from rep-tracker
+python -m pytest rep-tracker\backend        # from repo root
 ```
+
+## project layout
+
+- `src\` - react frontend (vite).
+- `backend\app.py` - flask api: geocoding, member lookup, caching, votes and legislation.
+- `package.json` - frontend scripts and deps.
+- `..\requirements.txt` - backend python deps.
