@@ -100,6 +100,7 @@ Useful API endpoints:
 - `GET /health`
 - `GET /representatives`
 - `POST /reps` with JSON `{ "address": "..." }` for address lookup, so addresses are not written to normal request logs as query strings
+- `POST /reps` with JSON `{ "lat": 40.75, "lon": -73.98 }` for browser "use my location" lookup, so coordinates are not written to normal request logs as query strings
 - `GET /reps?state=NY&district=12`
 - `GET /reps?representative=Alexandria%20Ocasio-Cortez`
 - `GET /member/<bioguide_id>/votes`

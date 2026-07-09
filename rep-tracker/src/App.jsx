@@ -427,7 +427,7 @@ function profileSummaryNote(profile) {
 }
 
 function sourceLabel(type, items) {
-  if (type === "profile") return "source: normalized recent roll-call votes"
+  if (type === "profile") return "source: recent House & Senate roll-call votes"
   if (type === "legislation") return "source: Congress.gov"
   if (items.some(item => item.source === "senate.gov")) return "source: Senate.gov roll call XML"
   return "source: Congress.gov house roll call data"
@@ -604,13 +604,13 @@ function IssueBriefing({ selectedIssues, officials, issueVotesByMember, issueLeg
                     {legBill.role === "sponsored" ? "sponsored bill" : "cosponsored bill"}
                   </span>
                   <div className="detail-title">{legBill.title}</div>
-                  <p className="vote-impact">no recent floor vote on this issue — this is legislation {officialDisplayName(legOfficial)} has backed.</p>
+                  <p className="vote-impact">no recent floor vote on this issue. this is legislation {officialDisplayName(legOfficial)} has backed.</p>
                   <div className="detail-meta">
                     {formatLegislationMeta(legBill, legOfficial).map(part => <span key={part}>{part}</span>)}
                   </div>
                 </>
               ) : (
-                <p className="issue-briefing-empty">no recent floor vote or backed bill on this issue yet. try policy profile for broader signals.</p>
+                <p className="issue-briefing-empty">no recent floor vote or backed bill on this issue yet. try the policy profile for a fuller picture.</p>
               )}
             </article>
           )
@@ -664,7 +664,7 @@ function MemberCard({ member, selectedIssues }) {
       }
       setExpandedType(type)
     } catch {
-      setMemberError("Could not load member details from the local API.")
+      setMemberError("We couldn't load this member's details. Please try again in a moment.")
     } finally {
       clearTimeout(skeletonTimer.current)
       setShowSkeleton(false)
@@ -743,7 +743,7 @@ function MemberCard({ member, selectedIssues }) {
               ))}
             </div>
           ) : (
-            <p className="empty-state">not enough substantive votes in the scanned snapshot.</p>
+            <p className="empty-state">not enough recent policy votes to build a profile yet.</p>
           )}
           {profile.notableVotes.length > 0 && (
             <>
@@ -806,6 +806,8 @@ function App() {
   const [showMoreIssues, setShowMoreIssues] = useState(false)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [locating, setLocating] = useState(false)
+  const [slowLoad, setSlowLoad] = useState(false)
   const [error, setError] = useState("")
   const [issueVotesByMember, setIssueVotesByMember] = useState({})
   const [issueLegislationByMember, setIssueLegislationByMember] = useState({})
@@ -874,7 +876,7 @@ function App() {
             setIssueBriefingError(
               successfulEntries.length
                 ? "some officials could not be loaded for this briefing."
-                : "could not load the issue briefing from the local api."
+                : "we couldn't load your issue briefing. please try again in a moment."
             )
           }
         }
@@ -882,7 +884,7 @@ function App() {
         if (!cancelled) {
           setIssueVotesByMember({})
           setIssueBriefingDataKey(currentRequestKey)
-          setIssueBriefingError("could not load the issue briefing from the local api.")
+          setIssueBriefingError("we couldn't load your issue briefing. please try again in a moment.")
         }
       } finally {
         if (!cancelled) setIssueBriefingLoading(false)
@@ -922,6 +924,17 @@ function App() {
       lookupSectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" })
     }
   }, [data, loading])
+
+  useEffect(() => {
+    if (!loading) return
+    // Render's free tier can take ~50s to cold-start. After a few seconds of
+    // waiting, reassure the user the request isn't stuck rather than failing.
+    const timer = setTimeout(() => setSlowLoad(true), 7000)
+    return () => {
+      clearTimeout(timer)
+      setSlowLoad(false)
+    }
+  }, [loading])
 
   async function fetchReps(searchOverride = searchText, modeOverride = searchMode) {
     const trimmedSearch = searchOverride.trim()
@@ -971,10 +984,60 @@ function App() {
       }
       setData(json)
     } catch {
-      setError("Could not reach the local API. Make sure the Flask server is running.")
+      setError("We couldn't reach the server. Please check your connection and try again.")
     } finally {
       setLoading(false)
     }
+  }
+
+  async function fetchRepsByCoordinates(latitude, longitude) {
+    setLoading(true)
+    setError("")
+    setData(null)
+    try {
+      // Send coordinates in the POST body, matching the address flow, so precise
+      // location never lands in a query string or normal request log.
+      const res = await fetch(`${API_BASE_URL}/reps`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: latitude, lon: longitude }),
+      })
+      const json = await res.json()
+      if (json.error) {
+        setError(json.error)
+        return
+      }
+      setData(json)
+    } catch {
+      setError("We couldn't reach the server. Please check your connection and try again.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function requestMyLocation() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setError("Your browser can't share your location. Try searching by address instead.")
+      return
+    }
+    setError("")
+    setData(null)
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      position => {
+        setLocating(false)
+        fetchRepsByCoordinates(position.coords.latitude, position.coords.longitude)
+      },
+      geolocationError => {
+        setLocating(false)
+        setError(
+          geolocationError.code === geolocationError.PERMISSION_DENIED
+            ? "Location access was blocked. You can search by address instead."
+            : "We couldn't get your location. Try searching by address."
+        )
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 }
+    )
   }
 
   function updateSearchText(value) {
@@ -1057,6 +1120,18 @@ function App() {
               </LoadingButtonContent>
             </button>
           </div>
+          {searchMode === "address" && (
+            <button
+              type="button"
+              className="location-button"
+              onClick={requestMyLocation}
+              disabled={loading || locating}
+            >
+              <LoadingButtonContent loading={locating} loadingText="finding you">
+                use my location
+              </LoadingButtonContent>
+            </button>
+          )}
           <p className="helper-text">{mode.helper}</p>
           <div className="issue-priority-panel" aria-label="Voter issue priorities">
             <div>
@@ -1102,6 +1177,12 @@ function App() {
 
       <div ref={lookupSectionRef} className="lookup-section-anchor">
         {error && <p className="status-message error">{error}</p>}
+        {loading && slowLoad && (
+          <p className="loading-hint" role="status">
+            the server is waking up. it runs on a free tier and naps when nobody's around (i can't
+            pay for 24/7 cpu). first load can take up to a minute. hang tight…
+          </p>
+        )}
         {loading && <ResultsSkeleton />}
 
         {data && (

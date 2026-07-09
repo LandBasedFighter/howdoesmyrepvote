@@ -324,37 +324,56 @@ def member_profile(bioguide_id):
     return cached(("member-profile", bioguide_id), fetch_profile)
 
 
+def parse_census_geographies(geos, state=None):
+    cd_key = next(k for k in geos if "Congressional Districts" in k)
+    congressional_district = geos[cd_key][0]
+    district = congressional_district.get("CD119") or congressional_district.get("BASENAME")
+    if district == "00" or "at large" in str(congressional_district.get("BASENAME", "")).casefold():
+        district = "AL"
+    county_items = next((value for key, value in geos.items() if "Counties" in key), [])
+    county = county_items[0].get("BASENAME") or county_items[0].get("NAME") if county_items else None
+    states = geos.get("States") or []
+    state_code = state or (states[0].get("STUSAB") if states else None)
+    return state_code, district, county
+
+
+def census_coordinates_geocode(longitude, latitude):
+    res = _session.get(
+        "https://geocoding.geo.census.gov/geocoder/geographies/coordinates",
+        params={
+            "x": longitude,
+            "y": latitude,
+            "benchmark": "Public_AR_Current",
+            "vintage": "Current_Current",
+            "layers": "all",
+            "format": "json",
+        },
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    res.raise_for_status()
+    geos = res.json()["result"]["geographies"]
+    return parse_census_geographies(geos)
+
+
+def geocode_coordinates(latitude, longitude):
+    """Resolve GPS coordinates (e.g. from the browser location API) straight to a
+    congressional district via the Census coordinate geocoder, so the "use my
+    location" flow never has to reconstruct a street address."""
+    def fetch_geocode():
+        try:
+            return census_coordinates_geocode(longitude, latitude)
+        except (requests.exceptions.RequestException, ValueError, KeyError, IndexError, StopIteration, TypeError):
+            return None, None, None
+
+    return cached(
+        ("geocode-coordinates", round(latitude, 5), round(longitude, 5)),
+        fetch_geocode,
+        should_cache=lambda result: bool(result and result[0]),
+    )
+
+
 def geocode_address(address):
     normalized_address = address.strip()
-
-    def parse_census_geographies(geos, state=None):
-        cd_key = next(k for k in geos if "Congressional Districts" in k)
-        congressional_district = geos[cd_key][0]
-        district = congressional_district.get("CD119") or congressional_district.get("BASENAME")
-        if district == "00" or "at large" in str(congressional_district.get("BASENAME", "")).casefold():
-            district = "AL"
-        county_items = next((value for key, value in geos.items() if "Counties" in key), [])
-        county = county_items[0].get("BASENAME") or county_items[0].get("NAME") if county_items else None
-        states = geos.get("States") or []
-        state_code = state or (states[0].get("STUSAB") if states else None)
-        return state_code, district, county
-
-    def census_coordinates_geocode(longitude, latitude):
-        res = _session.get(
-            "https://geocoding.geo.census.gov/geocoder/geographies/coordinates",
-            params={
-                "x": longitude,
-                "y": latitude,
-                "benchmark": "Public_AR_Current",
-                "vintage": "Current_Current",
-                "layers": "all",
-                "format": "json",
-            },
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        res.raise_for_status()
-        geos = res.json()["result"]["geographies"]
-        return parse_census_geographies(geos)
 
     def arcgis_coordinates():
         res = _session.get(
@@ -1018,7 +1037,7 @@ def ai_stance_summary(issues, evidence_votes, scan_count, policy_count):
             "Use bill titles only as supporting context; do not merely restate titles or issue bucket names. "
             "For each takeaway, start with a voter-facing label like 'Energy costs:', 'Military action:', 'Immigration:', 'Agency funding:', or 'Education:'. "
             "Each takeaway must say what the member supported or opposed and why that topic matters to ordinary voters. "
-            "If the evidence is thin, say 'early signal' inside that specific takeaway rather than making the whole answer vague. "
+            "If the evidence is thin, say 'limited data so far' inside that specific takeaway rather than making the whole answer vague. "
             "Summarize only what the vote evidence supports. "
             "Do not infer ideology, motives, or party loyalty beyond the votes shown. "
             "Return JSON with headline, takeaways (array of 3-4 short strings), and caveats (array). "
@@ -1067,7 +1086,7 @@ def build_stance_profile(votes, limit):
             direction = "more opposed"
         issue_summaries.append({
             **issue,
-            "confidence": "higher" if total >= 3 else "early signal",
+            "confidence": "higher" if total >= 3 else "limited data",
             "direction": direction,
             "totalVotes": total,
         })
@@ -1795,6 +1814,21 @@ def get_reps():
     state_arg = str(payload.get("state") or request.args.get("state", "")).strip().upper()
     district_arg = str(payload.get("district") or request.args.get("district", "")).strip()
     representative_arg = str(payload.get("representative") or request.args.get("representative", "")).strip()
+    latitude_arg = str(payload.get("lat") or request.args.get("lat", "")).strip()
+    longitude_arg = str(payload.get("lon") or request.args.get("lon", "")).strip()
+
+    if latitude_arg or longitude_arg:
+        try:
+            latitude = float(latitude_arg)
+            longitude = float(longitude_arg)
+        except ValueError:
+            return jsonify({"error": "provide valid coordinates"}), 400
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return jsonify({"error": "those coordinates are outside the valid range"}), 400
+        state, district, county = geocode_coordinates(latitude, longitude)
+        if not state:
+            return jsonify({"error": "We couldn't match your location to a congressional district. Try searching by address."}), 404
+        return jsonify(build_reps_response(state, district, county))
 
     if state_arg or district_arg:
         district = normalized_district(district_arg)

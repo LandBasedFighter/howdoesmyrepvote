@@ -57,7 +57,7 @@ describe('App', () => {
     )
   })
 
-  it('surfaces local API connection failures', async () => {
+  it('surfaces server connection failures', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
     render(<App />)
 
@@ -67,7 +67,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /search/i }))
 
     await waitFor(() => {
-      expect(screen.getByText(/could not reach the local api/i)).toBeInTheDocument()
+      expect(screen.getByText(/we couldn't reach the server/i)).toBeInTheDocument()
     })
   })
 
@@ -829,7 +829,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /search/i }))
 
     expect(await screen.findByText('your issue briefing')).toBeInTheDocument()
-    expect(screen.getByText('no recent floor vote or backed bill on this issue yet. try policy profile for broader signals.')).toBeInTheDocument()
+    expect(screen.getByText('no recent floor vote or backed bill on this issue yet. try the policy profile for a fuller picture.')).toBeInTheDocument()
   })
 
   it('keeps visible recent votes separate from deeper issue briefing depth', async () => {
@@ -968,7 +968,7 @@ describe('App', () => {
       json: () => Promise.resolve({ votes: [] }),
     })
 
-    expect(await screen.findByText('no recent floor vote or backed bill on this issue yet. try policy profile for broader signals.')).toBeInTheDocument()
+    expect(await screen.findByText('no recent floor vote or backed bill on this issue yet. try the policy profile for a fuller picture.')).toBeInTheDocument()
   })
 
   it('keeps successful issue matches when one official briefing request fails', async () => {
