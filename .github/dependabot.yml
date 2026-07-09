@@ -1,0 +1,40 @@
+# dependabot version updates for "how did your rep vote?"
+# docs: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  # frontend: react + vite (rep-tracker/package.json)
+  - package-ecosystem: "npm"
+    directory: "/rep-tracker"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      # bundle minor + patch bumps into one pr; majors stay separate
+      npm-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # backend: flask (requirements.txt)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pip-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # ci: github actions workflows (.github/workflows)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions-minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
