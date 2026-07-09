@@ -686,25 +686,25 @@ def interpret_vote(vote, context_text=None):
 
 
 IMPACT_TEMPLATES = {
-    "Healthcare": "Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.",
-    "Housing & homeownership": "Housing votes can affect rent, mortgages, homeownership costs, zoning, or housing supply.",
-    "Immigration & border": "Immigration and border votes can affect asylum, visas, enforcement, deportation policy, or border operations.",
-    "Defense, veterans & foreign policy": "Defense and foreign policy votes can affect service members, veterans, military action, overseas commitments, or national security spending.",
-    "Budget, taxes & government spending": "Budget and tax votes can affect federal spending, revenue, debt, agency funding, or household tax rules.",
-    "Education & student loans": "Education votes can affect schools, colleges, student debt, and access to education programs.",
-    "Energy, climate & utilities": "Energy and climate votes can affect household energy costs, emissions rules, public lands, or utility policy.",
-    "Federal agency rules & oversight": "Agency oversight votes can affect consumer protections, regulation, agency authority, or how Congress reviews federal rules.",
-    "Cost of living & consumer rules": "Consumer-rule votes can affect prices, fees, credit, household costs, or protections for buyers and borrowers.",
-    "Second Amendment & gun policy": "Gun policy votes can affect firearm rules, lawful ownership, background checks, public safety, or enforcement.",
-    "Crime & public safety": "Public safety votes can affect policing, courts, sentencing, victims services, crime prevention, or community safety programs.",
-    "Election rules": "Election-rule votes can affect voting access, ballot rules, voter identification, election administration, or campaign rules.",
-    "Free speech & online safety": "Speech and online-safety votes can affect expression, platform rules, child safety, censorship concerns, or digital privacy.",
-    "Abortion & reproductive policy": "Abortion and reproductive-policy votes can affect abortion rules, reproductive healthcare, pregnancy policy, or federal funding restrictions.",
-    "Civil rights & social policy": "Civil rights and social policy votes can affect privacy, discrimination rules, reproductive policy, or religious-liberty disputes.",
-    "Federal courts & nominations": "Nomination votes can affect who interprets federal law and how courts or agencies apply policy over time.",
+    "Healthcare": "This affects your coverage, your medical bills, and what you pay for prescriptions.",
+    "Housing & homeownership": "This affects your rent, your mortgage, and what it costs to buy a home.",
+    "Immigration & border": "This affects border security, who can legally come here, and how immigration is enforced.",
+    "Defense, veterans & foreign policy": "This affects the military, veterans' benefits, and when U.S. troops are sent overseas.",
+    "Budget, taxes & government spending": "This affects how much you pay in taxes and where your tax dollars go.",
+    "Education & student loans": "This affects public schools, college costs, and student loan debt.",
+    "Energy, climate & utilities": "This affects your energy bills, gas prices, and pollution rules.",
+    "Federal agency rules & oversight": "This affects the rules federal agencies can set and the consumer protections they enforce.",
+    "Cost of living & consumer rules": "This affects everyday prices, fees, and your protections as a shopper or borrower.",
+    "Second Amendment & gun policy": "This affects gun laws, background checks, and who can legally own a firearm.",
+    "Crime & public safety": "This affects policing, sentencing, and how safe your community is.",
+    "Election rules": "This affects how you vote, who can vote, and how elections are run.",
+    "Free speech & online safety": "This affects free speech, what you can say online, and how kids are kept safe on the internet.",
+    "Abortion & reproductive policy": "This affects abortion access, reproductive care, and federal funding rules.",
+    "Civil rights & social policy": "This affects your civil rights, your privacy, and protections against discrimination.",
+    "Federal courts & nominations": "This affects who becomes a federal judge and how the courts read the law for years to come.",
 }
 
-LIMITED_CONTEXT_MESSAGE = "This vote has limited public context in the scanned roll-call data."
+LIMITED_CONTEXT_MESSAGE = "There isn't enough public detail on this vote yet to say what it changes."
 
 
 def clean_vote_headline(vote):
@@ -737,8 +737,8 @@ def voter_context(vote, context_text=None, interpretation=None):
         impact = LIMITED_CONTEXT_MESSAGE
         context_note = LIMITED_CONTEXT_MESSAGE
     elif kind == "procedural":
-        impact = "Procedural votes usually shape debate, timing, or floor handling rather than directly changing policy."
-        context_note = "This is a process vote, so it may not directly decide the underlying bill."
+        impact = "This was a procedural vote. It sets up how a bill is handled rather than passing or blocking it."
+        context_note = "This is a process vote, so it doesn't directly pass or reject the bill itself."
     else:
         impact = IMPACT_TEMPLATES.get(issue, LIMITED_CONTEXT_MESSAGE)
         context_note = ""

@@ -692,9 +692,9 @@ def test_votes_endpoint_filters_senate_roll_call_xml(monkeypatch):
         "source": "senate.gov",
         "type": "On the Motion to Proceed",
         "voterContext": {
-            "contextNote": "This is a process vote, so it may not directly decide the underlying bill.",
+            "contextNote": "This is a process vote, so it doesn't directly pass or reject the bill itself.",
             "headline": "Motion to Proceed to S. J. Res. 185; A joint resolution to direct the removal of United States Armed Forces from hostilities.",
-            "impact": "Procedural votes usually shape debate, timing, or floor handling rather than directly changing policy.",
+            "impact": "This was a procedural vote. It sets up how a bill is handled rather than passing or blocking it.",
             "issue": "Procedure",
             "kind": "procedural",
             "positionLabel": "Voted Yea",
@@ -814,7 +814,7 @@ def test_voter_context_explains_healthcare_policy_vote():
     assert context == {
         "contextNote": "",
         "headline": "Veterans Health Care Improvement Act",
-        "impact": "Healthcare votes can affect care access, drug costs, hospitals, public health programs, or benefits for patients and veterans.",
+        "impact": "This affects your coverage, your medical bills, and what you pay for prescriptions.",
         "issue": "Healthcare",
         "kind": "policy",
         "positionLabel": "Voted Yea",
@@ -858,8 +858,8 @@ def test_voter_context_explains_procedural_votes_without_overclaiming():
     assert context["issue"] == "Procedure"
     assert context["kind"] == "procedural"
     assert context["headline"] == "On Ordering the Previous Question"
-    assert context["impact"] == "Procedural votes usually shape debate, timing, or floor handling rather than directly changing policy."
-    assert context["contextNote"] == "This is a process vote, so it may not directly decide the underlying bill."
+    assert context["impact"] == "This was a procedural vote. It sets up how a bill is handled rather than passing or blocking it."
+    assert context["contextNote"] == "This is a process vote, so it doesn't directly pass or reject the bill itself."
 
 
 def test_voter_context_uses_conservative_fallback_for_thin_votes():
@@ -869,9 +869,9 @@ def test_voter_context_uses_conservative_fallback_for_thin_votes():
     })
 
     assert context == {
-        "contextNote": "This vote has limited public context in the scanned roll-call data.",
+        "contextNote": "There isn't enough public detail on this vote yet to say what it changes.",
         "headline": "Vote details unavailable",
-        "impact": "This vote has limited public context in the scanned roll-call data.",
+        "impact": "There isn't enough public detail on this vote yet to say what it changes.",
         "issue": "Other recent policy",
         "kind": "procedural",
         "positionLabel": "Position unavailable",
@@ -969,7 +969,7 @@ def test_enrich_vote_uses_bill_context_for_voter_impact():
     })
 
     assert enriched["voterContext"]["impact"] == (
-        "Defense and foreign policy votes can affect service members, veterans, military action, overseas commitments, or national security spending. "
+        "This affects the military, veterans' benefits, and when U.S. troops are sent overseas. "
         "This resolution would direct the President to remove U.S. forces from hostilities with Iran unless Congress authorizes them."
     )
     assert enriched["voterContext"]["contextSource"] == "congress.gov bill summary"
@@ -1015,7 +1015,7 @@ def test_enrich_vote_uses_bill_summary_to_classify_environmental_regulation():
     assert enriched["interpretation"]["issue"] == "Energy, climate & utilities"
     assert enriched["voterContext"]["issue"] == "Energy, climate & utilities"
     assert enriched["voterContext"]["impact"] == (
-        "Energy and climate votes can affect household energy costs, emissions rules, public lands, or utility policy. "
+        "This affects your energy bills, gas prices, and pollution rules. "
         "This bill removes a Clean Air Act requirement for EPA review of newly proposed regulations."
     )
     assert enriched["voterContext"]["sourceSummary"] == (

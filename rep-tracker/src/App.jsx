@@ -505,6 +505,34 @@ function ResultsSkeleton() {
   )
 }
 
+function positionTone(vote) {
+  const label = String(vote.position || vote.voterContext?.positionLabel || "").toLowerCase()
+  if (/(yea|aye|\byes\b)/.test(label)) return "yea"
+  if (/(nay|\bno\b)/.test(label)) return "nay"
+  return "neutral"
+}
+
+function resultTone(result) {
+  const label = String(result || "").toLowerCase()
+  if (/(pass|agreed|adopted|confirmed)/.test(label)) return "pass"
+  if (/(fail|reject|not agreed|defeat)/.test(label)) return "fail"
+  return "neutral"
+}
+
+function ClampText({ text, className }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!text) return null
+  if (text.length <= 200) return <p className={className}>{text}</p>
+  return (
+    <div className={className}>
+      <p className={expanded ? "clamp-body" : "clamp-body clamp-3"}>{text}</p>
+      <button type="button" className="read-more-btn" onClick={() => setExpanded(value => !value)}>
+        {expanded ? "read less" : "read more"}
+      </button>
+    </div>
+  )
+}
+
 function VoteCard({ vote, displayName, selectedIssues }) {
   const context = vote.voterContext
   const metadata = voteMetadata(vote)
@@ -518,14 +546,14 @@ function VoteCard({ vote, displayName, selectedIssues }) {
     <li className={`detail-item vote-card ${context ? "vote-card-contextual" : ""}`}>
       <div className="detail-title">{headline}</div>
       {priorityLabel && <div className="priority-match-badge">{priorityLabel}</div>}
-      {impact && <div className="vote-impact">{impact}</div>}
+      {impact && <ClampText className="vote-impact" text={impact} />}
       {context?.contextNote && <div className="vote-context-note">{context.contextNote}</div>}
       {!context && vote.question && vote.question !== vote.description && (
         <div className="vote-question">{vote.question}</div>
       )}
       <div className="vote-row vote-row-prominent">
-        <span className="vote-position">{displayVotePosition(displayName, vote)}</span>
-        {result && <span>{result}</span>}
+        <span className={`vote-position tone-${positionTone(vote)}`}>{displayVotePosition(displayName, vote)}</span>
+        {result && <span className={`vote-result tone-${resultTone(result)}`}>{result}</span>}
       </div>
       {metadata && <div className="vote-metadata-line">{metadata}</div>}
       <div className="detail-meta">
@@ -589,10 +617,10 @@ function IssueBriefing({ selectedIssues, officials, issueVotesByMember, issueLeg
               {topMatch ? (
                 <>
                   <div className="detail-title">{headline}</div>
-                  {impact && <p className="vote-impact">{impact}</p>}
+                  {impact && <ClampText className="vote-impact" text={impact} />}
                   <div className="vote-row vote-row-prominent">
-                    <span className="vote-position">{displayVotePosition(officialDisplayName(official), vote)}</span>
-                    {vote.result && <span>{vote.voterContext?.resultLabel || vote.result}</span>}
+                    <span className={`vote-position tone-${positionTone(vote)}`}>{displayVotePosition(officialDisplayName(official), vote)}</span>
+                    {vote.result && <span className={`vote-result tone-${resultTone(vote.voterContext?.resultLabel || vote.result)}`}>{vote.voterContext?.resultLabel || vote.result}</span>}
                   </div>
                   <div className="detail-meta">
                     {formatVoteMeta(vote).map(part => <span key={part}>{part}</span>)}
@@ -604,7 +632,7 @@ function IssueBriefing({ selectedIssues, officials, issueVotesByMember, issueLeg
                     {legBill.role === "sponsored" ? "sponsored bill" : "cosponsored bill"}
                   </span>
                   <div className="detail-title">{legBill.title}</div>
-                  <p className="vote-impact">no recent floor vote on this issue. this is legislation {officialDisplayName(legOfficial)} has backed.</p>
+                  <p className="vote-impact">no recent floor vote here, but {officialDisplayName(legOfficial)} has backed a bill on this issue.</p>
                   <div className="detail-meta">
                     {formatLegislationMeta(legBill, legOfficial).map(part => <span key={part}>{part}</span>)}
                   </div>

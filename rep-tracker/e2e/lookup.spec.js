@@ -216,6 +216,6 @@ test('recent votes render voter-facing context cards', async ({ page }) => {
   await expect(page.getByText('Veterans Health Care Improvement Act')).toBeVisible()
   await expect(page.getByText('This bill would expand care access for veterans and patients.')).toBeVisible()
   await expect(page.getByText('Healthcare · Policy vote · Roll call 74 · HR 6329')).toBeVisible()
-  await expect(page.getByText(/Healthcare votes can affect/)).toHaveCount(0)
+  await expect(page.getByText(/This affects your coverage/)).toHaveCount(0)
   await expect(page.getByText('Alexandria Ocasio-Cortez Voted Yea')).toBeVisible()
 })

@@ -925,6 +925,64 @@ h3 {
   border-radius: 999px;
   color: var(--accent-dark);
   background: var(--accent-soft);
+  font-weight: 800;
+}
+
+.vote-position.tone-yea {
+  color: #155e31;
+  background: #dcfce7;
+}
+
+.vote-position.tone-nay {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.vote-result {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface-strong);
+  font-weight: 800;
+}
+
+.vote-result.tone-pass {
+  color: #155e31;
+  background: #dcfce7;
+}
+
+.vote-result.tone-fail {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.clamp-body {
+  margin: 0;
+}
+
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.read-more-btn {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-dark);
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.read-more-btn:hover,
+.read-more-btn:focus-visible {
+  text-decoration: underline;
 }
 
 .inline-error {
