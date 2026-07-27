@@ -237,15 +237,19 @@ function formatMemberName(name) {
   return `${givenNames} ${last.trim()}`.replace(/\s+/g, " ").trim()
 }
 
-function formatLatestAction(latestAction) {
+function formatLatestAction(latestAction, introducedDate) {
   if (!latestAction) return ""
   if (typeof latestAction !== "object") return latestAction
-  return `${latestAction.actionDate ?? ""} · ${latestAction.text ?? ""}`.replace(/^ · | · $/, "")
+  const actionDate = formatDateOnly(latestAction.actionDate)
+  // The introduced date is already shown in the meta row above, so only lead with
+  // the action date when the action actually happened on a different day.
+  const datePrefix = actionDate && actionDate !== formatDateOnly(introducedDate) ? actionDate : ""
+  return `${datePrefix} · ${latestAction.text ?? ""}`.replace(/^ · | · $/, "")
 }
 
 function formatBillMeta(bill) {
   const parts = [`${bill.type ?? "Bill"} ${bill.number ?? ""}`.trim()]
-  if (bill.introducedDate) parts.push(`introduced ${bill.introducedDate}`)
+  if (bill.introducedDate) parts.push(`introduced ${formatDateOnly(bill.introducedDate)}`)
   if (bill.policyArea) parts.push(bill.policyArea)
   return parts.filter(Boolean)
 }
@@ -804,17 +808,20 @@ function MemberCard({ member, selectedIssues }) {
               ? expandedItems.map((vote, i) => (
                 <VoteCard key={`${vote.rollCall}-${vote.date}-${i}`} vote={vote} displayName={displayName} selectedIssues={selectedIssues} />
               ))
-              : expandedItems.map((bill, i) => (
-                <li key={`${bill.type}-${bill.number}-${i}`} className="detail-item">
-                  <div className="detail-title">{bill.title ? bill.title : `Amendment ${bill.amendmentNumber}`}</div>
-                  <div className="detail-meta">
-                    {formatBillMeta(bill).map(part => <span key={part}>{part}</span>)}
-                  </div>
-                  {bill.latestAction && (
-                    <div className="latest-action">{formatLatestAction(bill.latestAction)}</div>
-                  )}
-                </li>
-              ))}
+              : expandedItems.map((bill, i) => {
+                const latestAction = formatLatestAction(bill.latestAction, bill.introducedDate)
+                return (
+                  <li key={`${bill.type}-${bill.number}-${i}`} className="detail-item">
+                    <div className="detail-title">{bill.title ? bill.title : `Amendment ${bill.amendmentNumber}`}</div>
+                    <div className="detail-meta">
+                      {formatBillMeta(bill).map(part => <span key={part}>{part}</span>)}
+                    </div>
+                    {latestAction && (
+                      <div className="latest-action">{latestAction}</div>
+                    )}
+                  </li>
+                )
+              })}
           </ul>
           <div className="source-line">{sourceLabel(expandedType, expandedItems)}</div>
         </div>
