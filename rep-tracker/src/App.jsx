@@ -237,6 +237,48 @@ function formatMemberName(name) {
   return `${givenNames} ${last.trim()}`.replace(/\s+/g, " ").trim()
 }
 
+const NAME_SUFFIXES = new Set(["jr", "sr", "ii", "iii", "iv", "v", "md", "phd"])
+
+function memberInitials(displayName) {
+  const terms = String(displayName || "")
+    .split(/\s+/)
+    .filter(term => term && !NAME_SUFFIXES.has(term.replace(/\./g, "").toLowerCase()))
+  if (terms.length === 0) return "?"
+  const first = terms[0][0]
+  const last = terms.length > 1 ? terms[terms.length - 1][0] : ""
+  return `${first}${last}`.toUpperCase()
+}
+
+// Newly appointed members often have no portrait on file yet, and congress.gov
+// occasionally serves a URL that 404s, so cover both cases with the same fallback.
+function MemberPhoto({ imageUrl, displayName }) {
+  // Tracking which URL failed (rather than a boolean) resets the fallback
+  // automatically when the card switches to a different member.
+  const [failedUrl, setFailedUrl] = useState(null)
+
+  if (imageUrl && failedUrl !== imageUrl) {
+    return (
+      <img
+        className="member-photo"
+        src={imageUrl}
+        alt={displayName}
+        onError={() => setFailedUrl(imageUrl)}
+      />
+    )
+  }
+
+  return (
+    <div
+      className="member-photo member-photo-empty"
+      role="img"
+      aria-label={`${displayName}, portrait not available`}
+      title="No official portrait available yet"
+    >
+      <span aria-hidden="true">{memberInitials(displayName)}</span>
+    </div>
+  )
+}
+
 function formatLatestAction(latestAction, introducedDate) {
   if (!latestAction) return ""
   if (typeof latestAction !== "object") return latestAction
@@ -711,9 +753,7 @@ function MemberCard({ member, selectedIssues }) {
   return (
     <article className={`member-card ${partyClass}`}>
       <div className="member-summary">
-        {member.depiction?.imageUrl && (
-          <img className="member-photo" src={member.depiction.imageUrl} alt={displayName} />
-        )}
+        <MemberPhoto imageUrl={member.depiction?.imageUrl} displayName={displayName} />
         <div className="member-details">
           <h3>{displayName}</h3>
           <span className="party-pill">{member.partyName}</span>

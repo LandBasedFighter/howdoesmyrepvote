@@ -611,6 +611,18 @@ h3 {
   box-shadow: 0 8px 18px rgba(33, 26, 22, 0.12);
 }
 
+.member-photo-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--party-color);
+  background: color-mix(in srgb, var(--party-color) 14%, white);
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
 .member-details {
   min-width: 0;
 }

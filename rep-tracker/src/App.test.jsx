@@ -120,6 +120,77 @@ describe('App', () => {
     })
   })
 
+  it('falls back to initials when a member has no portrait on file', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: () => Promise.resolve({
+        state: 'FL',
+        district: '1',
+        districtLabel: 'FL-1',
+        representative: {
+          bioguideId: 'R000000',
+          name: 'Reed, Dana',
+          partyName: 'Republican',
+          depiction: { imageUrl: 'https://example.test/reed.jpg' },
+          terms: { item: [{ chamber: 'House of Representatives' }] },
+        },
+        senators: [
+          {
+            bioguideId: 'S000001',
+            name: 'Vance, Priya B.',
+            partyName: 'Democratic',
+            terms: { item: [{ chamber: 'Senate' }] },
+          },
+        ],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '350 5th Ave New York, NY 10001' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    // The appointed senator has no depiction at all.
+    const placeholder = await screen.findByRole('img', { name: /priya b\. vance, portrait not available/i })
+    expect(placeholder).toHaveTextContent('PV')
+
+    // The representative has a working portrait, so no placeholder for them.
+    const photo = screen.getByRole('img', { name: 'Dana Reed' })
+    expect(photo).toHaveAttribute('src', 'https://example.test/reed.jpg')
+  })
+
+  it('falls back to initials when a portrait URL fails to load', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      json: () => Promise.resolve({
+        state: 'FL',
+        district: '1',
+        districtLabel: 'FL-1',
+        representative: {
+          bioguideId: 'R000000',
+          name: 'Reed, Dana',
+          partyName: 'Republican',
+          depiction: { imageUrl: 'https://example.test/missing.jpg' },
+          terms: { item: [{ chamber: 'House of Representatives' }] },
+        },
+        senators: [],
+      }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    render(<App />)
+
+    fireEvent.change(screen.getByLabelText(/your address/i), {
+      target: { value: '350 5th Ave New York, NY 10001' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /search/i }))
+
+    const photo = await screen.findByRole('img', { name: 'Dana Reed' })
+    fireEvent.error(photo)
+
+    expect(await screen.findByRole('img', { name: /dana reed, portrait not available/i })).toHaveTextContent('DR')
+    expect(screen.queryByRole('img', { name: 'Dana Reed' })).not.toBeInTheDocument()
+  })
+
   it('searches by congressional district without an address', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       json: () => Promise.resolve({
