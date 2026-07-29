@@ -101,3 +101,4 @@ python -m pytest rep-tracker\backend        # from repo root
 ## TODO
 
 - Add useful UX for recent elections and recently deceased members.
+- Build scheduled data ingestion to replace on-click upstream fetching.
