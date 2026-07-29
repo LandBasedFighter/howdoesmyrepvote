@@ -97,3 +97,7 @@ python -m pytest rep-tracker\backend        # from repo root
 - `backend\app.py` - flask api: geocoding, member lookup, caching, votes and legislation.
 - `package.json` - frontend scripts and deps.
 - `..\requirements.txt` - backend python deps.
+
+## TODO
+
+- Add useful UX for recent elections and recently deceased members.
