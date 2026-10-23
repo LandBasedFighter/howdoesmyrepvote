@@ -162,25 +162,38 @@ def cached(cache_key, fetcher, ttl=CACHE_TTL_SECONDS, should_cache=None):
 def clear_cache():
     with _cache_lock:
         _cache.clear()
+    with _last_warm_lock:
+        _last_warm.clear()
 
 
 WARM_MIN_INTERVAL_SECONDS = int(os.getenv("WARM_MIN_INTERVAL_SECONDS", "900"))
+# The Senate holds a few roll calls a day at most, and every rebuild is ~30 requests to senate.gov,
+# which rate-limits and blocks hosts that poll it hard. Refresh it far less often than the House.
+SENATE_WARM_MIN_INTERVAL_SECONDS = int(os.getenv("SENATE_WARM_MIN_INTERVAL_SECONDS", "10800"))
+SENATE_CACHE_TTL_SECONDS = int(os.getenv("SENATE_CACHE_TTL_SECONDS", "21600"))
+# After a failed rebuild, wait this long before trying the upstream again (warm pings and user requests).
+UPSTREAM_ERROR_BACKOFF_SECONDS = int(os.getenv("UPSTREAM_ERROR_BACKOFF_SECONDS", "3600"))
 _last_warm = {}
 _last_warm_lock = Lock()
 
 
-def warm_index(cache_key, builder, ttl=CACHE_TTL_SECONDS):
+def warm_index(cache_key, builder, ttl=CACHE_TTL_SECONDS, min_interval=WARM_MIN_INTERVAL_SECONDS):
     """Proactively refresh a slow index cache entry off the request critical path.
 
     A scheduled ping calls this so real users never wait on the multi-second
     roll-call scan. While the rebuild runs, the previous (still-fresh) value stays
     in the cache and is served on cached()'s fast path, so callers never block.
-    Throttled by WARM_MIN_INTERVAL_SECONDS so frequent pings don't rebuild every time,
+    Throttled by `min_interval` so frequent pings don't rebuild every time, backed off for
+    UPSTREAM_ERROR_BACKOFF_SECONDS after a failure so a blocked upstream isn't retried on every ping,
     and single-flighted so it never duplicates an in-progress build.
     """
     with _last_warm_lock:
-        if monotonic() - _last_warm.get(cache_key, 0.0) < WARM_MIN_INTERVAL_SECONDS:
-            return "fresh"
+        state = _last_warm.get(cache_key)
+        if state is not None:
+            last, failed = state if isinstance(state, tuple) else (state, False)
+            wait = UPSTREAM_ERROR_BACKOFF_SECONDS if failed else min_interval
+            if monotonic() - last < wait:
+                return "backoff" if failed else "fresh"
 
     key_lock = _get_key_lock(cache_key)
     if not key_lock.acquire(blocking=False):
@@ -188,11 +201,13 @@ def warm_index(cache_key, builder, ttl=CACHE_TTL_SECONDS):
     try:
         value = builder()
         if isinstance(value, dict) and value.get("error"):
+            with _last_warm_lock:
+                _last_warm[cache_key] = (monotonic(), True)
             return "error"
         with _cache_lock:
             _cache[cache_key] = {"value": value, "expires_at": monotonic() + ttl}
         with _last_warm_lock:
-            _last_warm[cache_key] = monotonic()
+            _last_warm[cache_key] = (monotonic(), False)
         return "refreshed"
     finally:
         key_lock.release()
@@ -1402,11 +1417,21 @@ def build_senate_vote_index():
     return {"source": "senate.gov", "votesByMember": votes_by_member}
 
 
+SENATE_INDEX_KEY = ("senate-vote-index", tuple(SENATE_VOTE_SESSIONS), SENATE_VOTE_SCAN_LIMIT)
+
+
 def senate_vote_index():
-    return cached(
-        ("senate-vote-index", tuple(SENATE_VOTE_SESSIONS), SENATE_VOTE_SCAN_LIMIT),
-        build_senate_vote_index,
-    )
+    # Remember a failure for a while so user requests don't each re-hit senate.gov while it's refusing us.
+    error_key = ("senate-vote-index-error",) + SENATE_INDEX_KEY[1:]
+    with _cache_lock:
+        entry = _cache.get(error_key)
+        if entry and entry["expires_at"] > monotonic():
+            return entry["value"]
+    value = cached(SENATE_INDEX_KEY, build_senate_vote_index, ttl=SENATE_CACHE_TTL_SECONDS)
+    if isinstance(value, dict) and value.get("error"):
+        with _cache_lock:
+            _cache[error_key] = {"value": value, "expires_at": monotonic() + UPSTREAM_ERROR_BACKOFF_SECONDS}
+    return value
 
 
 def find_representatives(state, district):
@@ -1827,8 +1852,10 @@ def warm():
             build_house_vote_index,
         ),
         "senate": warm_index(
-            ("senate-vote-index", tuple(SENATE_VOTE_SESSIONS), SENATE_VOTE_SCAN_LIMIT),
+            SENATE_INDEX_KEY,
             build_senate_vote_index,
+            ttl=SENATE_CACHE_TTL_SECONDS,
+            min_interval=SENATE_WARM_MIN_INTERVAL_SECONDS,
         ),
     }
     results["elapsed_s"] = round(monotonic() - started, 1)

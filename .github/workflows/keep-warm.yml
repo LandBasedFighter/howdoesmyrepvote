@@ -42,6 +42,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350       # just under GitHub's 6h hosted-job cap
     steps:
+      # Diagnostic: can GitHub's runners reach senate.gov? (Render's IP gets 403 as of Oct 2026.)
+      # One request per URL per run, never fails the job. Remove once the Senate data path is settled.
+      - name: Probe senate.gov reachability from the runner
+        continue-on-error: true
+        run: |
+          for url in \
+            "https://www.senate.gov/legislative/LIS/roll_call_lists/vote_menu_119_2.xml" \
+            "https://www.senate.gov/legislative/LIS/roll_call_lists/vote_menu_119_2.htm" \
+            "https://www.senate.gov/legislative/LIS/roll_call_votes/vote1192/vote_119_2_00256.xml"; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+              -A "howdoesmyrepvote/1.0 (+https://howdoesmyrepvote.us)" "$url" || echo "000")
+            echo "senate.gov probe -> HTTP $code  $url"
+          done
+
       - name: Keep instance awake + vote indexes hot (~5.7h self-loop)
         run: |
           URL="https://howdoesmyrepvote-api.onrender.com/warm"

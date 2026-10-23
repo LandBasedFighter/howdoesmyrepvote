@@ -1512,3 +1512,44 @@ def test_senate_vote_numbers_returns_error_when_both_menus_fail(monkeypatch):
 
     assert backend.senate_vote_numbers(119, 2, 5) == blocked
 
+
+def test_warm_index_backs_off_after_upstream_error(monkeypatch):
+    calls = []
+
+    def failing_builder():
+        calls.append(1)
+        return {"error": "Request failed: 403", "statusCode": 403}
+
+    key = ("test-warm-backoff",)
+    assert backend.warm_index(key, failing_builder) == "error"
+    assert backend.warm_index(key, failing_builder) == "backoff"
+    assert backend.warm_index(key, failing_builder) == "backoff"
+    assert len(calls) == 1
+
+
+def test_warm_index_respects_per_index_min_interval(monkeypatch):
+    calls = []
+
+    def builder():
+        calls.append(1)
+        return {"votesByMember": {}}
+
+    key = ("test-warm-interval",)
+    assert backend.warm_index(key, builder, min_interval=10800) == "refreshed"
+    assert backend.warm_index(key, builder, min_interval=10800) == "fresh"
+    assert len(calls) == 1
+
+
+def test_senate_vote_index_does_not_refetch_while_upstream_is_failing(monkeypatch):
+    calls = []
+
+    def blocked():
+        calls.append(1)
+        return {"error": "Request failed: 403", "statusCode": 403}
+
+    monkeypatch.setattr(backend, "build_senate_vote_index", blocked)
+
+    assert backend.senate_vote_index()["statusCode"] == 403
+    assert backend.senate_vote_index()["statusCode"] == 403
+    assert len(calls) == 1
+
