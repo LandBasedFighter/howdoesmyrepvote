@@ -505,6 +505,13 @@ POLICY_TERMS = (
 )
 
 ISSUE_TAXONOMY = {
+    # Checked first: these terms are specific, and data center bills would
+    # otherwise fall into the broader energy or cost-of-living buckets.
+    "AI & data centers": (
+        "artificial intelligence", "machine learning", "generative ai", "large language model",
+        "deepfake", "chatbot", "algorithmic", "data center", "data centre", "datacenter",
+        "hyperscale", "high-performance computing",
+    ),
     "Cost of living & consumer rules": (
         "affordability", "consumer", "credit", "fee", "price", "cost", "home appliance", "appliance",
     ),
@@ -693,6 +700,7 @@ IMPACT_TEMPLATES = {
     "Budget, taxes & government spending": "This affects how much you pay in taxes and where your tax dollars go.",
     "Education & student loans": "This affects public schools, college costs, and student loan debt.",
     "Energy, climate & utilities": "This affects your energy bills, gas prices, and pollution rules.",
+    "AI & data centers": "This affects how AI is used and regulated, and where data centers get built and how they draw on local power and water.",
     "Federal agency rules & oversight": "This affects the rules federal agencies can set and the consumer protections they enforce.",
     "Cost of living & consumer rules": "This affects everyday prices, fees, and your protections as a shopper or borrower.",
     "Second Amendment & gun policy": "This affects gun laws, background checks, and who can legally own a firearm.",
@@ -1256,6 +1264,35 @@ def senate_vote_menu_url(congress, session):
     return f"{SENATE_BASE_URL}/roll_call_lists/vote_menu_{congress}_{session}.xml"
 
 
+def senate_vote_menu_html_url(congress, session):
+    return f"{SENATE_BASE_URL}/roll_call_lists/vote_menu_{congress}_{session}.htm"
+
+
+def senate_vote_numbers(congress, session, limit):
+    """Most recent Senate roll-call numbers, newest first.
+
+    senate.gov started answering the XML vote menu with 403 (Oct 2026) while the HTML menu and the
+    per-vote XML files stay open, so fall back to reading vote numbers out of the HTML menu."""
+    menu = fetch_xml(senate_vote_menu_url(congress, session))
+    if not menu.get("error"):
+        return [xml_text(vote, "vote_number") for vote in menu["xml"].findall("./votes/vote")[:limit]]
+
+    try:
+        res = _session.get(senate_vote_menu_html_url(congress, session), timeout=REQUEST_TIMEOUT_SECONDS)
+    except requests.exceptions.RequestException:
+        return menu
+    if res.status_code >= 400:
+        return menu
+    pattern = re.compile(rf"vote_{re.escape(str(congress))}_{re.escape(str(session))}_(\d{{5}})\.htm")
+    numbers = []
+    for match in pattern.finditer(res.text):
+        number = match.group(1)
+        if number not in numbers:
+            numbers.append(number)
+    numbers.sort(reverse=True)
+    return numbers[:limit] if numbers else menu
+
+
 def senate_vote_detail_url(congress, session, vote_number):
     return (
         f"{SENATE_BASE_URL}/roll_call_votes/vote{congress}{session}/"
@@ -1336,14 +1373,10 @@ def senate_vote_member_key(member_vote):
 def build_senate_vote_index():
     votes_by_member = {}
     for congress, session in SENATE_VOTE_SESSIONS:
-        menu = fetch_xml(senate_vote_menu_url(congress, session))
-        if menu.get("error"):
-            return menu
+        vote_numbers = senate_vote_numbers(congress, session, SENATE_VOTE_SCAN_LIMIT)
+        if isinstance(vote_numbers, dict):
+            return vote_numbers
 
-        vote_numbers = [
-            xml_text(vote, "vote_number")
-            for vote in menu["xml"].findall("./votes/vote")[:SENATE_VOTE_SCAN_LIMIT]
-        ]
         def fetch_detail(vote_number):
             detail = fetch_xml(senate_vote_detail_url(congress, session, vote_number))
             if detail.get("error"):

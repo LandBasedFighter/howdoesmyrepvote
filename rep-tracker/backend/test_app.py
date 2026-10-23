@@ -1459,3 +1459,56 @@ def test_issue_legislation_endpoint_survives_missing_cosponsored_list(monkeypatc
 
     assert response.status_code == 200
     assert data["counts"]["Second Amendment & gun policy"] == 1
+
+
+def test_classify_issue_tags_ai_and_data_center_votes():
+    data_center_vote = {
+        "bill": {"number": "1", "title": "Data Center Energy Efficiency Act", "type": "HR"},
+        "description": "Data Center Energy Efficiency Act",
+        "question": "On Passage",
+    }
+    ai_vote = {
+        "bill": {"number": "2", "title": "Artificial Intelligence Risk Management Act", "type": "S"},
+        "description": "Artificial Intelligence Risk Management Act",
+        "question": "On Passage",
+    }
+    aid_vote = {
+        "bill": {"number": "3", "title": "Disaster Aid Supplemental Appropriations Act", "type": "HR"},
+        "description": "Disaster Aid Supplemental Appropriations Act",
+        "question": "On Passage",
+    }
+
+    assert backend.classify_issue(data_center_vote) == "AI & data centers"
+    assert backend.classify_issue(ai_vote) == "AI & data centers"
+    assert backend.classify_issue(aid_vote) != "AI & data centers"
+
+
+def test_senate_vote_numbers_falls_back_to_html_menu_when_xml_menu_is_blocked(monkeypatch):
+    monkeypatch.setattr(backend, "fetch_xml", lambda url: {"error": "Request failed: 403", "statusCode": 403})
+
+    class FakeResponse:
+        status_code = 200
+        text = (
+            '<a href="/legislative/LIS/roll_call_votes/vote1192/vote_119_2_00255.htm">255</a>'
+            '<a href="/legislative/LIS/roll_call_votes/vote1192/vote_119_2_00256.htm">256</a>'
+            '<a href="/legislative/LIS/roll_call_votes/vote1192/vote_119_2_00256.htm">256</a>'
+            '<a href="/legislative/LIS/roll_call_votes/vote1192/vote_119_2_00254.htm">254</a>'
+        )
+
+    monkeypatch.setattr(backend._session, "get", lambda url, timeout=None: FakeResponse())
+
+    assert backend.senate_vote_numbers(119, 2, 2) == ["00256", "00255"]
+
+
+def test_senate_vote_numbers_returns_error_when_both_menus_fail(monkeypatch):
+    blocked = {"error": "Request failed: 403", "statusCode": 403}
+    monkeypatch.setattr(backend, "fetch_xml", lambda url: blocked)
+
+    class FakeResponse:
+        status_code = 403
+        text = ""
+
+    monkeypatch.setattr(backend._session, "get", lambda url, timeout=None: FakeResponse())
+
+    assert backend.senate_vote_numbers(119, 2, 5) == blocked
+

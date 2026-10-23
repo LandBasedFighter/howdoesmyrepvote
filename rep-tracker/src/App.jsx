@@ -83,6 +83,11 @@ const CIVIC_ISSUES = [
     description: "Energy costs, emissions rules, public lands, and utility policy.",
   },
   {
+    key: "AI & data centers",
+    label: "AI & data centers",
+    description: "AI rules and safety, deepfakes, and data centers' effects on power bills, water, and local land use.",
+  },
+  {
     key: "Education & student loans",
     label: "education",
     description: "Schools, colleges, student debt, and education access.",
