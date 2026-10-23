@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 import json
 import os
 import re
+import unicodedata
+from datetime import date, timedelta
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
@@ -35,6 +37,9 @@ HOUSE_VOTE_SESSIONS = [
 SENATE_BASE_URL = "https://www.senate.gov/legislative/LIS"
 SENATE_VOTE_SCAN_LIMIT = max(int(os.getenv("SENATE_VOTE_SCAN_LIMIT", "40")), MAX_ISSUE_BRIEFING_VOTES)
 SENATE_VOTE_WORKERS = int(os.getenv("SENATE_VOTE_WORKERS", "8"))
+GOVINFO_BASE_URL = os.getenv("GOVINFO_BASE_URL", "https://api.govinfo.gov")
+# How far back to look in the Congressional Record for Senate roll calls (clamped to the current year).
+SENATE_GOVINFO_LOOKBACK_DAYS = int(os.getenv("SENATE_GOVINFO_LOOKBACK_DAYS", "120"))
 SENATE_VOTE_SESSIONS = [
     tuple(int(part) for part in session.strip().split(":", 1))
     for session in os.getenv("SENATE_VOTE_SESSIONS", "119:2").split(",")
@@ -467,7 +472,9 @@ def member_state_code(member):
 
 
 def normalize_name_key(value):
-    return "".join(ch.lower() for ch in (value or "") if ch.isalnum())
+    # Strip accents so "Luján" (Congress.gov) matches "Lujan" (Congressional Record).
+    plain = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode("ascii")
+    return "".join(ch.lower() for ch in plain if ch.isalnum())
 
 
 def senate_member_key(member):
@@ -1385,7 +1392,7 @@ def senate_vote_member_key(member_vote):
     )
 
 
-def build_senate_vote_index():
+def build_senate_vote_index_from_senate_gov():
     votes_by_member = {}
     for congress, session in SENATE_VOTE_SESSIONS:
         vote_numbers = senate_vote_numbers(congress, session, SENATE_VOTE_SCAN_LIMIT)
@@ -1414,7 +1421,210 @@ def build_senate_vote_index():
                             enrich_vote(normalize_senate_member_vote(vote, member_vote, enriched_title))
                         )
 
+    if not votes_by_member:
+        # The vote list loaded but every vote file was refused (or there were none): don't serve an empty index.
+        return {"error": "No Senate roll-call votes could be loaded from senate.gov", "statusCode": 502}
     return {"source": "senate.gov", "votesByMember": votes_by_member}
+
+
+# --- Congressional Record (GovInfo) fallback ------------------------------------------------------
+# senate.gov sits behind Akamai Bot Manager, which refuses cloud/server IPs (Render, GitHub runners) with
+# 403 as of 2026. The same roll calls are printed in the Congressional Record, served by GovInfo through
+# api.data.gov (the gateway Congress.gov already uses, same API key). The Record publishes about a day
+# after the vote, so this source lags slightly.
+
+CREC_ROLLCALL_RE = re.compile(r"\[\s*Rollcall\s+Vote\s+No\.\s*(\d+)[^\]]*\]", re.IGNORECASE)
+CREC_SECTION_RE = re.compile(
+    r"^\s*(YEAS|NAYS|NOT VOTING|ANSWERED\s+\W*PRESENT\W*)\s*-{1,2}\s*\d+\s*$", re.IGNORECASE
+)
+CREC_POSITION = {"YEAS": "Yea", "NAYS": "Nay", "NOT VOTING": "Not Voting", "PRESENT": "Present"}
+CREC_NAME_RE = re.compile(r"^([A-Za-z\u00C0-\u024F.' -]+?)(?:\s*\(([A-Z]{2})\))?$")
+CREC_BILL_RE = re.compile(
+    r"\b(H\.\s?R\.|S\.|H\.\s?J\.\s?Res\.|S\.\s?J\.\s?Res\.|S\.\s?Con\.\s?Res\.|S\.\s?Res\.)\s?(\d+)\b"
+)
+CREC_RESULT_RE = re.compile(
+    r"^\s*The (?:nomination|motion|bill|joint resolution|resolution|amendment|concurrent resolution|"
+    r"conference report|cloture motion|treaty|point of order)\b.*?\b(?:was|is|were)\b.*?\.(?=\s|$)",
+    re.IGNORECASE,
+)
+
+
+def crec_section_position(header):
+    header = header.upper()
+    if "PRESENT" in header:
+        return CREC_POSITION["PRESENT"]
+    return CREC_POSITION.get(" ".join(header.split()))
+
+
+def parse_crec_rollcalls(text):
+    """Parse every Senate roll call printed in a Congressional Record text block.
+
+    Returns dicts with rollCall, question, result, and members [(last_name, state_or_None, position)]."""
+    text = unescape(re.sub(r"<[^>]+>", "", text or ""))
+    matches = list(CREC_ROLLCALL_RE.finditer(text))
+    votes = []
+    for index, match in enumerate(matches):
+        before = text[(matches[index - 1].end() if index else 0):match.start()]
+        after = text[match.end():(matches[index + 1].start() if index + 1 < len(matches) else len(text))]
+
+        questions = re.findall(r"The question is,?\s*(.+?\?)", before, flags=re.DOTALL)
+        question = " ".join(questions[-1].split()) if questions else None
+
+        members, position, result = [], None, None
+        for line in after.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            header = CREC_SECTION_RE.match(line)
+            if header:
+                position = crec_section_position(header.group(1))
+                continue
+            if position and line.startswith("  ") and not stripped.endswith(".") and len(stripped) <= 40:
+                name = CREC_NAME_RE.match(stripped)
+                if name:
+                    members.append((name.group(1).strip(), name.group(2), position))
+                    continue
+            if members:
+                found = CREC_RESULT_RE.search(line)
+                result = " ".join(found.group(0).split()) if found else None
+                break
+
+        if members:
+            votes.append({"rollCall": match.group(1), "question": question, "result": result, "members": members})
+    return votes
+
+
+def crec_bill_reference(question):
+    found = CREC_BILL_RE.search(question or "")
+    if not found:
+        return None, None
+    raw_type = re.sub(r"\s+", "", found.group(1)).lower()
+    return SENATE_DOCUMENT_TYPE_MAP.get(raw_type, raw_type.replace(".", "")), found.group(2)
+
+
+def govinfo_get(path, method="get", **kwargs):
+    try:
+        res = _session.request(
+            method, f"{GOVINFO_BASE_URL}{path}", params={"api_key": get_api_key()},
+            timeout=REQUEST_TIMEOUT_SECONDS, **kwargs,
+        )
+    except requests.exceptions.RequestException:
+        return {"error": "GovInfo request failed", "statusCode": 502}
+    if res.status_code >= 400:
+        return {"error": f"GovInfo request failed: {res.status_code}", "statusCode": res.status_code}
+    return {"response": res}
+
+
+def govinfo_rollcall_granules(start, end, max_pages=3):
+    """(packageId, granuleId) pairs for Congressional Record sections that print a roll call, newest first."""
+    granules, offset_mark = [], "*"
+    for _ in range(max_pages):
+        found = govinfo_get("/search", method="post", json={
+            "query": f'collection:CREC publishdate:range({start},{end}) "Rollcall Vote No"',
+            "pageSize": 100,
+            "offsetMark": offset_mark,
+            "sorts": [{"field": "publishdate", "sortOrder": "DESC"}],
+        })
+        if found.get("error"):
+            return found
+        try:
+            payload = found["response"].json()
+        except ValueError:
+            return {"error": "GovInfo search returned a non-JSON response", "statusCode": 502}
+        for item in payload.get("results") or []:
+            if item.get("granuleId") and item.get("packageId"):
+                granules.append((item["packageId"], item["granuleId"]))
+        offset_mark = payload.get("offsetMark")
+        if not offset_mark or not payload.get("results"):
+            break
+    return granules
+
+
+def crec_package_date(package_id):
+    found = re.search(r"(\d{4}-\d{2}-\d{2})", package_id or "")
+    return found.group(1) if found else None
+
+
+def bill_short_title(congress, bill_type, number):
+    def fetch_title():
+        data = congress_get(f"bill/{congress}/{bill_type}/{number}")
+        if data.get("error"):
+            return None
+        bill = data.get("bill") or {}
+        return bill.get("shortTitle") or bill.get("latestTitle") or bill.get("title")
+
+    return cached(("senate-document-title", str(congress), bill_type, str(number)), fetch_title)
+
+
+def normalize_crec_member_vote(vote, position, congress, session, vote_date):
+    bill_type, bill_number = crec_bill_reference(vote.get("question"))
+    title = bill_short_title(congress, bill_type, bill_number) if bill_type and bill_number else None
+    question = vote.get("question")
+    return {
+        "bill": {"number": bill_number, "title": title, "type": bill_type.upper() if bill_type else None},
+        "chamber": "Senate",
+        "congress": str(congress),
+        "date": vote_date,
+        "description": title or question or f"Senate roll call {vote['rollCall']}",
+        "document": None,
+        "position": position,
+        "question": question,
+        "result": vote.get("result"),
+        "rollCall": vote["rollCall"],
+        "session": str(session),
+        "source": "govinfo.gov",
+        "type": question,
+    }
+
+
+def build_senate_vote_index_from_govinfo(today=None):
+    congress, session = SENATE_VOTE_SESSIONS[0]
+    today = today or date.today()
+    start = max(date(today.year, 1, 1), today - timedelta(days=SENATE_GOVINFO_LOOKBACK_DAYS))
+    granules = govinfo_rollcall_granules(start.isoformat(), today.isoformat())
+    if isinstance(granules, dict):
+        return granules
+
+    def fetch_votes(pair):
+        package_id, granule_id = pair
+        page = govinfo_get(f"/packages/{package_id}/granules/{granule_id}/htm")
+        if page.get("error"):
+            return []
+        return [(vote, crec_package_date(package_id)) for vote in parse_crec_rollcalls(page["response"].text)]
+
+    seen = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(SENATE_VOTE_WORKERS, len(granules) or 1))) as executor:
+        for found in executor.map(fetch_votes, granules):
+            for vote, vote_date in found:
+                seen.setdefault(vote["rollCall"], (vote, vote_date))
+
+    newest = sorted(seen.values(), key=lambda item: int(item[0]["rollCall"]), reverse=True)[:SENATE_VOTE_SCAN_LIMIT]
+    if not newest:
+        return {"error": "No Senate roll-call votes found in the Congressional Record", "statusCode": 502}
+
+    votes_by_member = {}
+    for vote, vote_date in newest:
+        for last_name, state, position in vote["members"]:
+            key = (normalize_name_key(last_name), state)
+            votes_by_member.setdefault(key, []).append(
+                enrich_vote(normalize_crec_member_vote(vote, position, congress, session, vote_date))
+            )
+    return {"source": "govinfo.gov", "votesByMember": votes_by_member}
+
+
+def build_senate_vote_index():
+    index = build_senate_vote_index_from_senate_gov()
+    if not index.get("error"):
+        return index
+    fallback = build_senate_vote_index_from_govinfo()
+    return index if fallback.get("error") else fallback
+
+
+def senate_votes_for(index, member_key):
+    """Votes for (last-name key, state). The Congressional Record only tags a name with its state when two
+    senators share it, so fall back to the untagged last name."""
+    by_member = index.get("votesByMember", {})
+    return by_member.get(member_key) or by_member.get((member_key[0], None), [])
 
 
 SENATE_INDEX_KEY = ("senate-vote-index", tuple(SENATE_VOTE_SESSIONS), SENATE_VOTE_SCAN_LIMIT)
@@ -2077,7 +2287,7 @@ def member_vote_pool(bioguide_id):
         if index.get("error"):
             return index
         return {
-            "votes": index.get("votesByMember", {}).get(senate_member_key(profile), []),
+            "votes": senate_votes_for(index, senate_member_key(profile)),
             "source": index.get("source"),
         }
 

@@ -1553,3 +1553,117 @@ def test_senate_vote_index_does_not_refetch_while_upstream_is_failing(monkeypatc
     assert backend.senate_vote_index()["statusCode"] == 403
     assert len(calls) == 1
 
+
+# Trimmed from the Congressional Record, Sept. 30, 2026 (CREC-2026-09-30-pt1-PgS5238), plus a second,
+# legislative roll call in the same section to cover bills, multiple votes per page, and accented names.
+CREC_SAMPLE = """
+  The PRESIDING OFFICER. The question is, Will the Senate advise and
+consent to the Sonderling nomination?
+  Mr. BARRASSO. I ask for the yeas and nays.
+  The PRESIDING OFFICER. Is there a sufficient second?
+  There appears to be a sufficient second.
+  The clerk will call the roll.
+  The result was announced--yeas 47, nays 41, as follows:
+
+                      [Rollcall Vote No. 256 Ex.]
+
+                                YEAS--47
+
+     Armstrong
+     Scott (FL)
+     Scott (SC)
+
+                                NAYS--41
+
+     Luj&aacute;n
+     Ossoff
+     Warnock
+
+                             NOT VOTING--12
+
+     Blackburn
+  The nomination was confirmed.
+  The PRESIDING OFFICER. Under the previous order, the motion to
+reconsider is considered made and laid upon the table.
+
+                          ____________________
+
+  The PRESIDING OFFICER. The question is, Shall the bill (H.R. 9500) pass?
+  The result was announced--yeas 90, nays 8, as follows:
+
+                      [Rollcall Vote No. 257 Leg.]
+
+                                YEAS--90
+
+     Ossoff
+     Warnock
+
+                                NAYS--8
+
+     Scott (FL)
+
+                      ANSWERED ``PRESENT''--1
+
+     Armstrong
+  The bill (H.R. 9500) was passed.
+"""
+
+
+def test_parse_crec_rollcalls_reads_positions_questions_and_results():
+    votes = backend.parse_crec_rollcalls(CREC_SAMPLE)
+
+    assert [vote["rollCall"] for vote in votes] == ["256", "257"]
+    nomination, bill = votes
+    assert nomination["question"] == "Will the Senate advise and consent to the Sonderling nomination?"
+    assert nomination["result"] == "The nomination was confirmed."
+    assert ("Scott", "FL", "Yea") in nomination["members"]
+    assert ("Scott", "SC", "Yea") in nomination["members"]
+    assert ("Luj\u00e1n", None, "Nay") in nomination["members"]
+    assert ("Blackburn", None, "Not Voting") in nomination["members"]
+    assert len(nomination["members"]) == 7
+    assert bill["question"] == "Shall the bill (H.R. 9500) pass?"
+    assert bill["result"] == "The bill (H.R. 9500) was passed."
+    assert ("Armstrong", None, "Present") in bill["members"]
+
+
+def test_crec_bill_reference_maps_to_congress_bill_types():
+    assert backend.crec_bill_reference("Shall the bill (H.R. 9500) pass?") == ("hr", "9500")
+    assert backend.crec_bill_reference("Shall the joint resolution (S.J. Res. 12) pass?") == ("sjres", "12")
+    assert backend.crec_bill_reference("Will the Senate advise and consent to the Smith nomination?") == (None, None)
+
+
+def test_senate_index_falls_back_to_congressional_record_and_matches_members(monkeypatch):
+    blocked = {"error": "Request failed: 403", "statusCode": 403}
+    monkeypatch.setattr(backend, "build_senate_vote_index_from_senate_gov", lambda: blocked)
+    monkeypatch.setattr(backend, "govinfo_rollcall_granules",
+                        lambda start, end: [("CREC-2026-09-30", "CREC-2026-09-30-pt1-PgS5238")])
+
+    class Page:
+        text = CREC_SAMPLE
+
+    monkeypatch.setattr(backend, "govinfo_get", lambda path, **kwargs: {"response": Page()})
+    monkeypatch.setattr(backend, "bill_short_title", lambda congress, bill_type, number: "Tax Relief for Fraud Victims Act")
+
+    index = backend.build_senate_vote_index()
+
+    assert index["source"] == "govinfo.gov"
+    warnock = backend.senate_votes_for(index, ("warnock", "GA"))
+    assert [vote["rollCall"] for vote in warnock] == ["257", "256"]  # newest first
+    assert warnock[1]["position"] == "Nay"
+    assert warnock[1]["date"] == "2026-09-30"
+    assert warnock[0]["description"] == "Tax Relief for Fraud Victims Act"
+    assert warnock[0]["bill"] == {"number": "9500", "title": "Tax Relief for Fraud Victims Act", "type": "HR"}
+    # Same last name: the state tag decides; an accented roster name still matches the Record's spelling.
+    assert [vote["position"] for vote in backend.senate_votes_for(index, ("scott", "SC"))] == ["Yea"]
+    assert [vote["position"] for vote in backend.senate_votes_for(index, ("scott", "FL"))] == ["Nay", "Yea"]
+    lujan_key = (backend.normalize_name_key("Luj\u00e1n"), "NM")
+    assert [vote["position"] for vote in backend.senate_votes_for(index, lujan_key)] == ["Nay"]
+
+
+def test_senate_index_keeps_upstream_error_when_both_sources_fail(monkeypatch):
+    blocked = {"error": "Request failed: 403", "statusCode": 403}
+    monkeypatch.setattr(backend, "build_senate_vote_index_from_senate_gov", lambda: blocked)
+    monkeypatch.setattr(backend, "build_senate_vote_index_from_govinfo", lambda: {"error": "GovInfo request failed: 503", "statusCode": 503})
+
+    assert backend.build_senate_vote_index() == blocked
+

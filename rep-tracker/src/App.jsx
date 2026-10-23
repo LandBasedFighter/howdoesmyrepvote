@@ -481,6 +481,7 @@ function sourceLabel(type, items) {
   if (type === "profile") return "source: recent House & Senate roll-call votes"
   if (type === "legislation") return "source: Congress.gov"
   if (items.some(item => item.source === "senate.gov")) return "source: Senate.gov roll call XML"
+  if (items.some(item => item.source === "govinfo.gov")) return "source: Congressional Record (GovInfo)"
   return "source: Congress.gov house roll call data"
 }
 
