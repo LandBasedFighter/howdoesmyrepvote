@@ -1635,13 +1635,8 @@ def test_crec_bill_reference_maps_to_congress_bill_types():
 def test_senate_index_falls_back_to_congressional_record_and_matches_members(monkeypatch):
     blocked = {"error": "Request failed: 403", "statusCode": 403}
     monkeypatch.setattr(backend, "build_senate_vote_index_from_senate_gov", lambda: blocked)
-    monkeypatch.setattr(backend, "govinfo_rollcall_granules",
-                        lambda start, end: [("CREC-2026-09-30", "CREC-2026-09-30-pt1-PgS5238")])
-
-    class Page:
-        text = CREC_SAMPLE
-
-    monkeypatch.setattr(backend, "govinfo_get", lambda path, **kwargs: {"response": Page()})
+    monkeypatch.setattr(backend, "crec_packages", lambda start, end: ["CREC-2026-09-30"])
+    monkeypatch.setattr(backend, "crec_day_rollcalls", lambda package_id: backend.parse_crec_rollcalls(CREC_SAMPLE))
     monkeypatch.setattr(backend, "bill_short_title", lambda congress, bill_type, number: "Tax Relief for Fraud Victims Act")
 
     index = backend.build_senate_vote_index()
@@ -1666,4 +1661,106 @@ def test_senate_index_keeps_upstream_error_when_both_sources_fail(monkeypatch):
     monkeypatch.setattr(backend, "build_senate_vote_index_from_govinfo", lambda: {"error": "GovInfo request failed: 503", "statusCode": 503})
 
     assert backend.build_senate_vote_index() == blocked
+
+
+# Trimmed from the Senate Daily Digest, Sept. 30, 2026 (CREC-2026-09-30-pt1-PgD954).
+DIGEST_SAMPLE = """
+Nominations Confirmed: Senate confirmed the following nominations:
+  By 47 yeas to 41 nays (Vote No. EX. 256), Keith Sonderling, of
+Florida, to be Secretary of Labor.
+Pages S5199-S5201, S5241
+  By 53 yeas to 47 nays (Vote No. 255), Senate agreed to the motion to
+close further debate on the nomination.
+Pages S5199-S5200
+Record Votes: Four record votes were taken today. (Total--256)
+                                               Pages S5199-S5200, S5241
+Adjournment: Senate convened at 10:15 a.m. and adjourned at 11:25 p.m.
+"""
+
+
+def test_expand_senate_pages_handles_ranges_and_short_forms():
+    assert backend.expand_senate_pages("S5199-S5200, S5241") == [5199, 5200, 5241]
+    assert backend.expand_senate_pages("S4850-51") == [4850, 4851]
+    assert backend.expand_senate_pages("S5140, S5158-59") == [5140, 5158, 5159]
+
+
+def test_parse_senate_digest_reads_vote_numbers_and_record_vote_pages():
+    assert backend.parse_senate_digest(DIGEST_SAMPLE) == ([253, 254, 255, 256], [5199, 5200, 5241])
+
+
+def test_candidate_senate_granules_include_the_section_running_onto_the_page():
+    # Real Senate section IDs from Sept. 30, 2026: vote 256 is printed on S5241 inside the section starting on S5238.
+    ids = [f"CREC-2026-09-30-pt1-PgS{suffix}" for suffix in
+           ["5236", "5237", "5238", "5241", "5241-2", "5241-3", "5242"]]
+    picked = backend.candidate_senate_granules(ids, [5241])
+    assert picked[0] == "CREC-2026-09-30-pt1-PgS5238"
+    assert "CREC-2026-09-30-pt1-PgS5241-3" in picked
+    assert "CREC-2026-09-30-pt1-PgS5242" not in picked
+
+
+def test_crec_day_rollcalls_stops_once_every_digest_vote_is_found(monkeypatch):
+    fetched = []
+
+    class Page:
+        def __init__(self, text):
+            self.text = text
+
+    def fake_get(path, params=None, **kwargs):
+        if path.endswith("PgD954/htm"):
+            return {"response": Page(DIGEST_SAMPLE.replace("Vote No. 255", "Vote No. 257").replace("Four record votes", "Two record votes").replace("Total--256", "Total--257"))}
+        fetched.append(path)
+        return {"response": Page(CREC_SAMPLE if path.endswith("PgS5238/htm") else "")}
+
+    def fake_granules(package_id, granule_class):
+        if granule_class == "DAILYDIGEST":
+            return [("CREC-2026-09-30-pt1-PgD954", "Daily Digest/Senate")]
+        return [(f"CREC-2026-09-30-pt1-PgS{n}", "") for n in ["5238", "5241", "5241-2"]]
+
+    monkeypatch.setattr(backend, "govinfo_get", fake_get)
+    monkeypatch.setattr(backend, "govinfo_granules", fake_granules)
+
+    votes = backend.crec_day_rollcalls("CREC-2026-09-30")
+
+    assert [vote["rollCall"] for vote in votes] == ["257", "256"]
+    assert len(fetched) == 1  # found both digest votes in the first section; no further fetches
+
+
+def test_digest_entries_give_clean_vote_descriptions():
+    entries = backend.parse_digest_vote_entries(DIGEST_SAMPLE.replace("Senators.", "Senators.\x00\x00"))
+
+    assert backend.digest_vote_description(entries[256]) == "Confirmation of Keith Sonderling, of Florida, to be Secretary of Labor"
+    assert backend.digest_vote_result(entries[256]["summary"], entries[256]["topic"]) == "Confirmed"
+    # The cloture vote listed under the confirmation names the nominee instead of "the nomination".
+    assert backend.digest_vote_description(entries[255]) == (
+        "Senate agreed to the motion to close further debate on the nomination of "
+        "Keith Sonderling, of Florida, to be Secretary of Labor."
+    )
+    assert entries[255]["tally"] == "53-47"
+
+
+def test_senate_digest_title_matches_highlights_variant_only():
+    assert backend.is_senate_digest_title("Daily Digest/Senate")
+    assert backend.is_senate_digest_title("Daily Digest/Highlights + Senate")
+    assert not backend.is_senate_digest_title("Daily Digest/Senate Committee Meetings")
+    assert not backend.is_senate_digest_title(
+        "Daily Digest/Next Meeting of the SENATE + Next Meeting of the HOUSE OF REPRESENTATIVES + Other End Matter"
+    )
+
+
+def test_digest_result_headings_become_results_not_topics():
+    digest = """
+Measures Considered:
+Protect College Sports Act--Agreement: Senate resumed consideration of
+S. 4668, to protect student athletes.
+  Pages S4850-52
+Rejected:
+  By 48 yeas to 49 nays (Vote No. 248), Booker/Blumenthal Amendment No.
+6805 (to Amendment No. 6776), to increase the limit.
+Page S5010
+"""
+    entry = backend.parse_digest_vote_entries(digest)[248]
+
+    assert entry["result"] == "Rejected"
+    assert entry["topic"] == "Protect College Sports Act"
+    assert backend.digest_vote_description(entry).startswith("Protect College Sports Act: Booker/Blumenthal Amendment No. 6805")
 

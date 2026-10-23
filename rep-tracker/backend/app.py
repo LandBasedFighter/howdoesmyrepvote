@@ -1432,6 +1432,10 @@ def build_senate_vote_index_from_senate_gov():
 # 403 as of 2026. The same roll calls are printed in the Congressional Record, served by GovInfo through
 # api.data.gov (the gateway Congress.gov already uses, same API key). The Record publishes about a day
 # after the vote, so this source lags slightly.
+#
+# GovInfo's full-text search misses many Record sections, so instead, per day: read the Senate Daily Digest
+# (it lists each vote number and the Senate pages it is printed on), list that day's Senate sections, and
+# fetch only the sections on or just before those pages until every vote the digest lists is found.
 
 CREC_ROLLCALL_RE = re.compile(r"\[\s*Rollcall\s+Vote\s+No\.\s*(\d+)[^\]]*\]", re.IGNORECASE)
 CREC_SECTION_RE = re.compile(
@@ -1502,42 +1506,270 @@ def crec_bill_reference(question):
     return SENATE_DOCUMENT_TYPE_MAP.get(raw_type, raw_type.replace(".", "")), found.group(2)
 
 
-def govinfo_get(path, method="get", **kwargs):
-    try:
-        res = _session.request(
-            method, f"{GOVINFO_BASE_URL}{path}", params={"api_key": get_api_key()},
-            timeout=REQUEST_TIMEOUT_SECONDS, **kwargs,
-        )
-    except requests.exceptions.RequestException:
+GOVINFO_ATTEMPTS = int(os.getenv("GOVINFO_ATTEMPTS", "3"))
+
+
+def govinfo_get(path, params=None, method="get", **kwargs):
+    """GET/POST against GovInfo. Retries its intermittent 5xx errors (common when paging granule lists)."""
+    res = None
+    for attempt in range(max(1, GOVINFO_ATTEMPTS)):
+        try:
+            res = _session.request(
+                method, f"{GOVINFO_BASE_URL}{path}", params={"api_key": get_api_key(), **(params or {})},
+                timeout=REQUEST_TIMEOUT_SECONDS, **kwargs,
+            )
+        except requests.exceptions.RequestException:
+            res = None
+        if res is not None and res.status_code < 500:
+            break
+        if attempt + 1 < GOVINFO_ATTEMPTS:
+            sleep(0.5 * (attempt + 1))
+    if res is None:
         return {"error": "GovInfo request failed", "statusCode": 502}
     if res.status_code >= 400:
         return {"error": f"GovInfo request failed: {res.status_code}", "statusCode": res.status_code}
     return {"response": res}
 
 
-def govinfo_rollcall_granules(start, end, max_pages=3):
-    """(packageId, granuleId) pairs for Congressional Record sections that print a roll call, newest first."""
+DIGEST_VOTE_RE = re.compile(r"Vote No\.\s*(?:EX\.\s*)?(\d+)", re.IGNORECASE)
+DIGEST_PAGES_RE = re.compile(r"Record Votes?:.*?Pages?\s+((?:S\d+(?:-S?\d+)?(?:,\s*)?)+)", re.IGNORECASE | re.DOTALL)
+SENATE_GRANULE_PAGE_RE = re.compile(r"-PgS(\d+)(?:-(\d+))?$")
+
+
+def expand_senate_pages(pages_text):
+    """'S5199-S5200, S5241' -> [5199, 5200, 5241]; 'S4850-51' -> [4850, 4851]."""
+    pages = []
+    for first, last in re.findall(r"S(\d+)(?:-S?(\d+))?", pages_text or ""):
+        first_page = int(first)
+        last_page = first_page
+        if last:
+            # Short form keeps only the trailing digits: S5226-31 means S5226-S5231.
+            last_page = int(first[: len(first) - len(last)] + last) if len(last) < len(first) else int(last)
+        pages.extend(range(first_page, min(last_page, first_page + 20) + 1))
+    return sorted(set(pages))
+
+
+DIGEST_TOTAL_RE = re.compile(
+    r"Record Votes?:\s*(\w+(?:-\w+)?) record votes? (?:was|were) taken today\.?\s*\(Total\s*-+\s*(\d+)\)",
+    re.IGNORECASE,
+)
+NUMBER_WORDS = {word: index for index, word in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+    "seventeen eighteen nineteen twenty".split()
+)}
+
+
+def digest_vote_count(word):
+    word = (word or "").lower()
+    if word.isdigit():
+        return int(word)
+    if word.startswith("twenty-"):
+        return 20 + NUMBER_WORDS.get(word.split("-", 1)[1], 0)
+    return NUMBER_WORDS.get(word)
+
+
+def parse_senate_digest(text):
+    """Vote numbers and Senate page numbers from a 'Daily Digest/Senate' section.
+
+    The digest's "Record Votes: Four record votes were taken today. (Total--256)" line gives the exact set
+    (253-256); individual "Vote No." mentions are a fallback since multi-vote phrasing can omit some."""
+    text = clean_digest_text(text)
+    votes = {int(number) for number in DIGEST_VOTE_RE.findall(text)}
+    total = DIGEST_TOTAL_RE.search(" ".join(text.split()))
+    if total:
+        count = digest_vote_count(total.group(1))
+        if count:
+            last = int(total.group(2))
+            votes |= set(range(last - count + 1, last + 1))
+    votes = sorted(votes)
+    pages_match = DIGEST_PAGES_RE.search(text)
+    return votes, expand_senate_pages(pages_match.group(1) if pages_match else "")
+
+
+DIGEST_ENTRY_RE = re.compile(
+    r"By\s+(\d+)\s+yeas?\s+to\s+(\d+)\s+nays?\s*\(Vote No\.\s*(?:EX\.\s*)?(\d+)\),?\s*(.+?)(?=\n\s*Pages?\s+S\d|\n\s*\n|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+DIGEST_HEADING_RE = re.compile(r"(?:^|\n)[ ]{0,3}([A-Z][^:\n]*(?:\n[^:\n]+){0,2}?):\s", re.MULTILINE)
+GENERIC_DIGEST_HEADINGS = {
+    "pending", "withdrawn", "measures considered", "measures passed", "measures introduced", "chamber action",
+    "nominations received", "appointments", "executive communications", "record votes", "adjournment",
+    "rejected", "adopted", "agreed to", "not agreed to",
+}
+# Amendment votes are listed under these headings, which state the outcome rather than the subject.
+DIGEST_RESULT_HEADINGS = {"rejected": "Rejected", "not agreed to": "Rejected", "adopted": "Agreed to", "agreed to": "Agreed to"}
+
+
+def clean_digest_text(text):
+    text = unescape(re.sub(r"<[^>]+>", "", text or ""))
+    return text.replace("\x00", "")
+
+
+def clean_digest_topic(topic):
+    topic = " ".join((topic or "").split())
+    # A heading can be preceded on the line above by the previous entry's page reference.
+    topic = re.split(r"Pages?\s+S\d[\d\-, S]*", topic)[-1].strip()
+    return re.sub(r"--(?:Agreement|Cloture|Motion to Proceed)\b.*$", "", topic).strip()
+
+
+def digest_topic_before(text, position):
+    for heading in reversed(list(DIGEST_HEADING_RE.finditer(text, 0, position))):
+        topic = clean_digest_topic(heading.group(1))
+        lowered = topic.lower()
+        if not topic or lowered in GENERIC_DIGEST_HEADINGS or lowered.startswith(("during consideration", "by ")):
+            continue
+        if len(topic) > 200 or "amendment no." in lowered:
+            continue
+        return topic
+    return None
+
+
+def parse_digest_vote_entries(text):
+    """{vote number: {"tally", "topic", "summary"}} from the Senate Daily Digest's "By 47 yeas to 41 nays
+    (Vote No. EX. 256), ..." sentences. The topic is the nearest real section heading above the sentence."""
+    text = clean_digest_text(text)
+    entries, last_nominee = {}, None
+    for match in DIGEST_ENTRY_RE.finditer(text):
+        summary = " ".join(match.group(4).split()).rstrip(" .;")
+        # "three-fifths of those Senators duly chosen and sworn, having voted in the affirmative, Senate agreed..."
+        summary = re.sub(r"^three-fifths of those Senators duly chosen and sworn, having voted in the affirmative,\s*",
+                         "", summary, flags=re.IGNORECASE)
+        topic = digest_topic_before(text, match.start())
+        nearest = list(DIGEST_HEADING_RE.finditer(text, 0, match.start()))
+        heading_result = DIGEST_RESULT_HEADINGS.get(clean_digest_topic(nearest[-1].group(1)).lower()) if nearest else None
+        if topic and topic.lower().startswith("nominations confirmed"):
+            if summary.lower().startswith("senate "):
+                # A cloture vote listed under the confirmation it led to: name the nominee.
+                if last_nominee:
+                    summary = re.sub(r"\bthe nomination\b", f"the nomination of {last_nominee}", summary, count=1)
+                topic = None
+            else:
+                last_nominee = summary
+        entries[int(match.group(3))] = {
+            "tally": f"{match.group(1)}-{match.group(2)}",
+            "topic": topic,
+            "summary": (summary + ".")[:400],
+            "result": heading_result,
+        }
+    return entries
+
+
+def digest_vote_description(entry):
+    topic, summary = entry.get("topic"), entry.get("summary") or ""
+    if topic and topic.lower().startswith("nominations confirmed"):
+        return f"Confirmation of {summary.rstrip('.')}"
+    if topic and topic.lower() not in summary.lower():
+        return f"{topic}: {summary}"
+    return summary
+
+
+def digest_vote_result(summary, topic=None):
+    if (topic or "").lower().startswith("nominations confirmed"):
+        return "Confirmed"
+    text = (summary or "").lower()
+    for phrase, result in (
+        ("did not agree", "Rejected"), ("not agreed", "Rejected"), ("failed", "Failed"), ("rejected", "Rejected"),
+        ("agreed", "Agreed to"), ("passed", "Passed"), ("adopted", "Agreed to"), ("confirmed", "Confirmed"),
+        ("sustained", "Sustained"), ("tabled", "Tabled"),
+    ):
+        if phrase in text:
+            return result
+    return None
+
+
+def govinfo_granules(package_id, granule_class):
+    """[(granuleId, title)] for one Congressional Record issue and section class, or an error dict."""
     granules, offset_mark = [], "*"
-    for _ in range(max_pages):
-        found = govinfo_get("/search", method="post", json={
-            "query": f'collection:CREC publishdate:range({start},{end}) "Rollcall Vote No"',
-            "pageSize": 100,
-            "offsetMark": offset_mark,
-            "sorts": [{"field": "publishdate", "sortOrder": "DESC"}],
-        })
-        if found.get("error"):
-            return found
+    for _ in range(10):
+        page = govinfo_get(f"/packages/{package_id}/granules",
+                           params={"pageSize": 100, "offsetMark": offset_mark, "granuleClass": granule_class})
+        if page.get("error"):
+            return page if not granules else granules
         try:
-            payload = found["response"].json()
+            payload = page["response"].json()
         except ValueError:
-            return {"error": "GovInfo search returned a non-JSON response", "statusCode": 502}
-        for item in payload.get("results") or []:
-            if item.get("granuleId") and item.get("packageId"):
-                granules.append((item["packageId"], item["granuleId"]))
-        offset_mark = payload.get("offsetMark")
-        if not offset_mark or not payload.get("results"):
+            return {"error": "GovInfo returned a non-JSON granule list", "statusCode": 502}
+        granules += [(g.get("granuleId"), g.get("title")) for g in payload.get("granules") or [] if g.get("granuleId")]
+        next_page = payload.get("nextPage") or ""
+        found = re.search(r"offsetMark=([^&]+)", next_page)
+        if not found:
             break
+        offset_mark = requests.utils.unquote(found.group(1))
     return granules
+
+
+def candidate_senate_granules(granule_ids, pages):
+    """Sections that start on a cited page, plus the section(s) starting just before it, which can run onto it."""
+    starts = {}
+    for granule_id in granule_ids:
+        found = SENATE_GRANULE_PAGE_RE.search(granule_id)
+        if found:
+            starts.setdefault(int(found.group(1)), []).append(granule_id)
+    ordered_starts = sorted(starts)
+    picked = []
+    for page in pages:
+        earlier = [start for start in ordered_starts if start < page]
+        for start in ([earlier[-1]] if earlier else []) + ([page] if page in starts else []):
+            for granule_id in starts[start]:
+                if granule_id not in picked:
+                    picked.append(granule_id)
+    return picked
+
+
+def crec_packages(start, end):
+    """Congressional Record issue IDs dated within [start, end], newest first."""
+    listing = govinfo_get(f"/collections/CREC/{start}T00:00:00Z", params={"pageSize": 100, "offsetMark": "*"})
+    if listing.get("error"):
+        return listing
+    try:
+        packages = listing["response"].json().get("packages") or []
+    except ValueError:
+        return {"error": "GovInfo returned a non-JSON collection", "statusCode": 502}
+    issued = [
+        (p.get("dateIssued"), p.get("packageId")) for p in packages
+        if p.get("packageId") and start <= (p.get("dateIssued") or "") <= end
+    ]
+    return [package_id for _, package_id in sorted(issued, reverse=True)]
+
+
+def is_senate_digest_title(title):
+    """'Daily Digest/Senate', or 'Daily Digest/Highlights + Senate' on days the digest opens with highlights;
+    not 'Senate Committee Meetings' or 'Next Meeting of the SENATE + ...'."""
+    return bool(re.search(r"^daily digest/(?:.*\+\s*)?senate$", " ".join((title or "").lower().split())))
+
+
+def crec_day_rollcalls(package_id):
+    """All Senate roll calls printed in one Congressional Record issue, via its Daily Digest."""
+    digests = govinfo_granules(package_id, "DAILYDIGEST")
+    if isinstance(digests, dict):
+        return digests
+    digest_id = next((gid for gid, title in digests if is_senate_digest_title(title)), None)
+    if not digest_id:
+        return []
+    digest = govinfo_get(f"/packages/{package_id}/granules/{digest_id}/htm")
+    if digest.get("error"):
+        return digest
+    expected, pages = parse_senate_digest(digest["response"].text)
+    if not expected:
+        return []
+    entries = parse_digest_vote_entries(digest["response"].text)
+
+    senate = govinfo_granules(package_id, "SENATE")
+    if isinstance(senate, dict):
+        return senate
+    found = {}
+    for granule_id in candidate_senate_granules([gid for gid, _ in senate], pages):
+        page = govinfo_get(f"/packages/{package_id}/granules/{granule_id}/htm")
+        if page.get("error"):
+            continue
+        for vote in parse_crec_rollcalls(page["response"].text):
+            found.setdefault(int(vote["rollCall"]), vote)
+        if all(number in found for number in expected):
+            break
+    for number, vote in found.items():
+        if number in entries:
+            vote["digest"] = entries[number]
+    return [found[number] for number in sorted(found, reverse=True)]
 
 
 def crec_package_date(package_id):
@@ -1557,19 +1789,23 @@ def bill_short_title(congress, bill_type, number):
 
 
 def normalize_crec_member_vote(vote, position, congress, session, vote_date):
-    bill_type, bill_number = crec_bill_reference(vote.get("question"))
+    # The Daily Digest's one-line summary is official and clean; the floor text's "The question is..." is a
+    # fallback, since debate text can contain that phrase too.
+    digest = vote.get("digest") or {}
+    digest_description = digest_vote_description(digest) if digest else None
+    question = digest_description or vote.get("question")
+    bill_type, bill_number = crec_bill_reference(question)
     title = bill_short_title(congress, bill_type, bill_number) if bill_type and bill_number else None
-    question = vote.get("question")
     return {
         "bill": {"number": bill_number, "title": title, "type": bill_type.upper() if bill_type else None},
         "chamber": "Senate",
         "congress": str(congress),
         "date": vote_date,
-        "description": title or question or f"Senate roll call {vote['rollCall']}",
+        "description": digest_description or title or question or f"Senate roll call {vote['rollCall']}",
         "document": None,
         "position": position,
         "question": question,
-        "result": vote.get("result"),
+        "result": digest.get("result") or digest_vote_result(digest.get("summary"), digest.get("topic")) or vote.get("result"),
         "rollCall": vote["rollCall"],
         "session": str(session),
         "source": "govinfo.gov",
@@ -1581,24 +1817,26 @@ def build_senate_vote_index_from_govinfo(today=None):
     congress, session = SENATE_VOTE_SESSIONS[0]
     today = today or date.today()
     start = max(date(today.year, 1, 1), today - timedelta(days=SENATE_GOVINFO_LOOKBACK_DAYS))
-    granules = govinfo_rollcall_granules(start.isoformat(), today.isoformat())
-    if isinstance(granules, dict):
-        return granules
+    packages = crec_packages(start.isoformat(), today.isoformat())
+    if isinstance(packages, dict):
+        return packages
 
-    def fetch_votes(pair):
-        package_id, granule_id = pair
-        page = govinfo_get(f"/packages/{package_id}/granules/{granule_id}/htm")
-        if page.get("error"):
-            return []
-        return [(vote, crec_package_date(package_id)) for vote in parse_crec_rollcalls(page["response"].text)]
+    # Days are independent, so work through them newest-first in parallel batches and stop once there are
+    # enough votes. Each day stays sequential inside (it stops early once its digest's votes are found).
+    collected = []
+    batch_size = max(1, SENATE_VOTE_WORKERS)
+    with ThreadPoolExecutor(max_workers=batch_size) as executor:
+        for offset in range(0, len(packages), batch_size):
+            batch = packages[offset:offset + batch_size]
+            for package_id, day in zip(batch, executor.map(crec_day_rollcalls, batch)):
+                if isinstance(day, dict):
+                    continue
+                vote_date = crec_package_date(package_id)
+                collected += [(vote, vote_date) for vote in day]
+            if len(collected) >= SENATE_VOTE_SCAN_LIMIT:
+                break
 
-    seen = {}
-    with ThreadPoolExecutor(max_workers=max(1, min(SENATE_VOTE_WORKERS, len(granules) or 1))) as executor:
-        for found in executor.map(fetch_votes, granules):
-            for vote, vote_date in found:
-                seen.setdefault(vote["rollCall"], (vote, vote_date))
-
-    newest = sorted(seen.values(), key=lambda item: int(item[0]["rollCall"]), reverse=True)[:SENATE_VOTE_SCAN_LIMIT]
+    newest = sorted(collected, key=lambda item: int(item[0]["rollCall"]), reverse=True)[:SENATE_VOTE_SCAN_LIMIT]
     if not newest:
         return {"error": "No Senate roll-call votes found in the Congressional Record", "statusCode": 502}
 
