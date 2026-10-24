@@ -1637,7 +1637,7 @@ def parse_digest_vote_entries(text):
         topic = digest_topic_before(text, match.start())
         nearest = list(DIGEST_HEADING_RE.finditer(text, 0, match.start()))
         heading_result = DIGEST_RESULT_HEADINGS.get(clean_digest_topic(nearest[-1].group(1)).lower()) if nearest else None
-        if topic and topic.lower().startswith("nominations confirmed"):
+        if is_confirmation_topic(topic):
             if summary.lower().startswith("senate "):
                 # A cloture vote listed under the confirmation it led to: name the nominee.
                 if last_nominee:
@@ -1654,9 +1654,14 @@ def parse_digest_vote_entries(text):
     return entries
 
 
+def is_confirmation_topic(topic):
+    """The digest heads confirmations "Nominations Confirmed:" or, for a single one, "Nomination Confirmed:"."""
+    return bool(re.match(r"nominations? confirmed\b", (topic or "").strip().lower()))
+
+
 def digest_vote_description(entry):
     topic, summary = entry.get("topic"), entry.get("summary") or ""
-    if topic and topic.lower().startswith("nominations confirmed"):
+    if is_confirmation_topic(topic):
         return f"Confirmation of {summary.rstrip('.')}"
     if topic and topic.lower() not in summary.lower():
         return f"{topic}: {summary}"
@@ -1664,7 +1669,7 @@ def digest_vote_description(entry):
 
 
 def digest_vote_result(summary, topic=None):
-    if (topic or "").lower().startswith("nominations confirmed"):
+    if is_confirmation_topic(topic):
         return "Confirmed"
     text = (summary or "").lower()
     for phrase, result in (
@@ -1805,7 +1810,13 @@ def normalize_crec_member_vote(vote, position, congress, session, vote_date):
         "document": None,
         "position": position,
         "question": question,
-        "result": digest.get("result") or digest_vote_result(digest.get("summary"), digest.get("topic")) or vote.get("result"),
+        "result": (
+            digest.get("result")
+            or digest_vote_result(digest.get("summary"), digest.get("topic"))
+            # The floor text's sentence ("The nomination was confirmed.") mapped to the same short labels.
+            or digest_vote_result(vote.get("result"))
+            or vote.get("result")
+        ),
         "rollCall": vote["rollCall"],
         "session": str(session),
         "source": "govinfo.gov",

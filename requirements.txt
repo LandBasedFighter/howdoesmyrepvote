@@ -1,6 +1,8 @@
 flask
 flask-cors
 requests
+# eMudhra CA compromise (Oct 2026): requests trusts certifi's bundle, which drops the bad certs from 2026.10.19
+certifi>=2026.10.19
 python-dotenv
 gunicorn
 pytest

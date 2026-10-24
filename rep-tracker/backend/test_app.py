@@ -1764,3 +1764,20 @@ Page S5010
     assert entry["topic"] == "Protect College Sports Act"
     assert backend.digest_vote_description(entry).startswith("Protect College Sports Act: Booker/Blumenthal Amendment No. 6805")
 
+
+def test_single_confirmation_heading_and_floor_results_use_short_labels():
+    digest = """
+Nomination Confirmed: Senate confirmed the following nomination:
+  By 50 yeas to 46 nays (Vote No. EX. 238), Kasdin Miller Mitchell, of
+Texas, to be United States District Judge.
+Page S4800
+"""
+    entry = backend.parse_digest_vote_entries(digest)[238]
+    assert backend.digest_vote_description(entry) == "Confirmation of Kasdin Miller Mitchell, of Texas, to be United States District Judge"
+    assert backend.digest_vote_result(entry["summary"], entry["topic"]) == "Confirmed"
+
+    floor_only = {"rollCall": "233", "question": None, "result": "The nomination was confirmed.", "members": []}
+    assert backend.normalize_crec_member_vote(floor_only, "Nay", 119, 2, "2026-09-15")["result"] == "Confirmed"
+    rejected = dict(floor_only, result="The motion was not agreed to.")
+    assert backend.normalize_crec_member_vote(rejected, "Nay", 119, 2, "2026-09-15")["result"] == "Rejected"
+
